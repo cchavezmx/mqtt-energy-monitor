@@ -60,9 +60,10 @@ class PzemProtocolTests(unittest.TestCase):
 
             store = ReadingStore(path)
             row = store.connection.execute(
-                "SELECT status, detail FROM readings"
+                "SELECT status, detail, session_id FROM readings"
             ).fetchone()
-            self.assertEqual(row, ("OK", None))
+            self.assertEqual(row[:2], ("OK", None))
+            self.assertIsNotNone(row[2])
 
     def test_store_separates_sources_and_creates_automatic_csv(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -83,6 +84,17 @@ class PzemProtocolTests(unittest.TestCase):
                 rows = list(csv.reader(input_file))
             self.assertEqual(rows[0][:3], ["fecha", "etiqueta", "puerto"])
             self.assertEqual(rows[1][1:3], ["Tablero norte", "COM3"])
+
+    def test_session_history_can_be_resumed_and_deleted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ReadingStore(Path(directory) / "lecturas.db")
+            session_id = store.create_session("Principal", "COM9")
+            store.close_session(session_id)
+            self.assertEqual(store.latest_session("principal", "com9")[0], session_id)
+            store.resume_session(session_id)
+            self.assertIsNone(store.latest_session("Principal", "COM9")[2])
+            store.delete_session(session_id)
+            self.assertEqual(store.session_history(), [])
 
 
 if __name__ == "__main__":

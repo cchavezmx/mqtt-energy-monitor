@@ -83,12 +83,18 @@ class ReadingStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.csv_dir = path.parent / "csv"
         self.connection = sqlite3.connect(path)
+        self.connection.execute("PRAGMA synchronous=FULL")
         self.connection.execute(
             """CREATE TABLE IF NOT EXISTS readings (
             timestamp TEXT NOT NULL, voltage REAL, current REAL, power REAL,
             energy REAL, frequency REAL, power_factor REAL,
             status TEXT NOT NULL DEFAULT 'OK', detail TEXT,
-            source_tag TEXT NOT NULL DEFAULT 'Principal', port TEXT)"""
+            source_tag TEXT NOT NULL DEFAULT 'Principal', port TEXT, session_id INTEGER)"""
+        )
+        self.connection.execute(
+            """CREATE TABLE IF NOT EXISTS sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, source_tag TEXT NOT NULL,
+            port TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT)"""
         )
         columns = {row[1] for row in self.connection.execute("PRAGMA table_info(readings)")}
         if "status" not in columns:
@@ -103,15 +109,32 @@ class ReadingStore:
             )
         if "port" not in columns:
             self.connection.execute("ALTER TABLE readings ADD COLUMN port TEXT")
-        self.connection.execute("PRAGMA synchronous=FULL")
+        if "session_id" not in columns:
+            self.connection.execute("ALTER TABLE readings ADD COLUMN session_id INTEGER")
+        legacy_groups = self.connection.execute(
+            """SELECT source_tag, port, MIN(timestamp), MAX(timestamp) FROM readings
+            WHERE session_id IS NULL GROUP BY source_tag, port"""
+        ).fetchall()
+        for source_tag, port, started_at, ended_at in legacy_groups:
+            cursor = self.connection.execute(
+                """INSERT INTO sessions (source_tag, port, started_at, ended_at)
+                VALUES (?, ?, ?, ?)""",
+                (source_tag or "Principal", port or "Desconocido", started_at, ended_at),
+            )
+            self.connection.execute(
+                """UPDATE readings SET session_id = ?
+                WHERE session_id IS NULL AND source_tag = ? AND port IS ?""",
+                (cursor.lastrowid, source_tag, port),
+            )
         self.connection.commit()
 
-    def _csv_path(self, source_tag: str) -> Path:
+    def _csv_path(self, source_tag: str, session_id=None) -> Path:
         safe_tag = re.sub(r"[^A-Za-z0-9._-]+", "_", source_tag).strip("._") or "puerto"
-        return self.csv_dir / f"lecturas_{safe_tag}.csv"
+        suffix = f"_sesion_{session_id}" if session_id else ""
+        return self.csv_dir / f"lecturas_{safe_tag}{suffix}.csv"
 
-    def _append_csv(self, row: tuple, source_tag: str):
-        path = self._csv_path(source_tag)
+    def _append_csv(self, row: tuple, source_tag: str, session_id=None):
+        path = self._csv_path(source_tag, session_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         needs_header = not path.exists() or path.stat().st_size == 0
         with open(path, "a", newline="", encoding="utf-8-sig") as output:
@@ -128,35 +151,91 @@ class ReadingStore:
         self.connection.execute(
             """INSERT INTO readings
             (timestamp, voltage, current, power, energy, frequency, power_factor,
-             status, source_tag, port)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'OK', ?, ?)""",
+             status, source_tag, port, session_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'OK', ?, ?, ?)""",
             (reading["timestamp"], reading["voltage"], reading["current"],
              reading["power"], reading["energy"], reading["frequency"],
              reading["power_factor"], reading.get("source_tag", "Principal"),
-             reading.get("port")),
+             reading.get("port"), reading.get("session_id")),
         )
         self.connection.commit()
         self._append_csv((reading["timestamp"], reading.get("source_tag", "Principal"),
                           reading.get("port"), reading["voltage"], reading["current"],
                           reading["power"], reading["energy"], reading["frequency"],
                           reading["power_factor"], "OK", ""),
-                         reading.get("source_tag", "Principal"))
+                         reading.get("source_tag", "Principal"), reading.get("session_id"))
 
     def add_event(self, event: dict):
         self.connection.execute(
-            """INSERT INTO readings (timestamp, status, detail, source_tag, port)
-            VALUES (?, ?, ?, ?, ?)""",
+            """INSERT INTO readings (timestamp, status, detail, source_tag, port, session_id)
+            VALUES (?, ?, ?, ?, ?, ?)""",
             (event["timestamp"], event["status"], event["detail"],
-             event.get("source_tag", "Principal"), event.get("port")),
+             event.get("source_tag", "Principal"), event.get("port"), event.get("session_id")),
         )
         self.connection.commit()
         self._append_csv((event["timestamp"], event.get("source_tag", "Principal"),
                           event.get("port"), "", "", "", "", "", "",
                           event["status"], event["detail"]),
-                         event.get("source_tag", "Principal"))
+                         event.get("source_tag", "Principal"), event.get("session_id"))
 
-    def recent(self, source_tag=None, limit=120):
-        if source_tag is None:
+    def create_session(self, source_tag, port):
+        started_at = datetime.now().isoformat(sep=" ", timespec="seconds")
+        cursor = self.connection.execute(
+            "INSERT INTO sessions (source_tag, port, started_at) VALUES (?, ?, ?)",
+            (source_tag, port, started_at),
+        )
+        self.connection.commit()
+        return cursor.lastrowid
+
+    def latest_session(self, source_tag, port):
+        return self.connection.execute(
+            """SELECT id, started_at, ended_at FROM sessions
+            WHERE lower(source_tag) = lower(?) AND lower(port) = lower(?)
+            ORDER BY id DESC LIMIT 1""", (source_tag, port)
+        ).fetchone()
+
+    def close_session(self, session_id):
+        self.connection.execute(
+            "UPDATE sessions SET ended_at = ? WHERE id = ?",
+            (datetime.now().isoformat(sep=" ", timespec="seconds"), session_id),
+        )
+        self.connection.commit()
+
+    def resume_session(self, session_id):
+        self.connection.execute("UPDATE sessions SET ended_at = NULL WHERE id = ?", (session_id,))
+        self.connection.commit()
+
+    def session_history(self):
+        return self.connection.execute(
+            """SELECT s.id, s.source_tag, s.port, s.started_at, s.ended_at,
+            COUNT(r.rowid) FROM sessions s LEFT JOIN readings r ON r.session_id = s.id
+            GROUP BY s.id ORDER BY s.id DESC"""
+        ).fetchall()
+
+    def export_session_csv(self, session_id, destination):
+        rows = self.connection.execute(
+            """SELECT timestamp, source_tag, port, voltage, current, power, energy,
+            frequency, power_factor, status, detail FROM readings
+            WHERE session_id = ? ORDER BY rowid""", (session_id,)
+        ).fetchall()
+        self._write_export(destination, rows)
+
+    def delete_session(self, session_id):
+        row = self.connection.execute(
+            "SELECT source_tag FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        self.connection.execute("DELETE FROM readings WHERE session_id = ?", (session_id,))
+        self.connection.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        self.connection.commit()
+        if row:
+            path = self._csv_path(row[0], session_id)
+            if path.exists():
+                path.unlink()
+
+    def recent(self, source_tag=None, limit=120, session_id=None):
+        if session_id is not None:
+            condition, parameters = "AND session_id = ?", (session_id, limit)
+        elif source_tag is None:
             condition, parameters = "", (limit,)
         else:
             condition, parameters = "AND source_tag = ?", (source_tag, limit)
@@ -171,6 +250,10 @@ class ReadingStore:
             """SELECT timestamp, source_tag, port, voltage, current, power, energy,
             frequency, power_factor, status, detail FROM readings ORDER BY rowid"""
         ).fetchall()
+        self._write_export(destination, rows)
+
+    @staticmethod
+    def _write_export(destination, rows):
         with open(destination, "w", newline="", encoding="utf-8-sig") as output:
             writer = csv.writer(output)
             writer.writerow(("fecha", "etiqueta", "puerto", "voltaje_V", "corriente_A",
@@ -180,10 +263,11 @@ class ReadingStore:
 
 
 class PzemWorker(threading.Thread):
-    def __init__(self, monitor_id, source_tag, port, address, interval, retry_interval,
+    def __init__(self, monitor_id, session_id, source_tag, port, address, interval, retry_interval,
                  messages, stop_event):
         super().__init__(daemon=True)
         self.monitor_id = monitor_id
+        self.session_id = session_id
         self.source_tag = source_tag
         self.port = port
         self.address = address
@@ -206,7 +290,7 @@ class PzemWorker(threading.Thread):
                             sep=" ", timespec="seconds"
                         )
                         reading.update(source_tag=self.source_tag, port=self.port,
-                                       monitor_id=self.monitor_id)
+                                       monitor_id=self.monitor_id, session_id=self.session_id)
                         if outage_started is not None:
                             duration = int(time.monotonic() - outage_started)
                             self.messages.put(("recovered", {
@@ -217,6 +301,7 @@ class PzemWorker(threading.Thread):
                                 "source_tag": self.source_tag,
                                 "port": self.port,
                                 "monitor_id": self.monitor_id,
+                                "session_id": self.session_id,
                             }))
                             outage_started = None
                         self.messages.put(("reading", reading))
@@ -233,6 +318,7 @@ class PzemWorker(threading.Thread):
                     "source_tag": self.source_tag,
                     "port": self.port,
                     "monitor_id": self.monitor_id,
+                    "session_id": self.session_id,
                 }
                 self.messages.put(("outage", event))
                 self.stop_event.wait(self.retry_interval)
@@ -309,6 +395,8 @@ class MonitorApp(tk.Tk):
                    command=self.stop_selected).pack(fill="x", pady=(8, 0))
         ttk.Button(actions, text="EXPORTAR CSV",
                    command=self.export_csv).pack(fill="x", pady=(8, 0))
+        ttk.Button(actions, text="HISTORIAL",
+                   command=self.show_history).pack(fill="x", pady=(8, 0))
 
         self.alert = tk.StringVar(value="Agrega un puerto para comenzar")
         self.alert_label = tk.Label(
@@ -395,23 +483,41 @@ class MonitorApp(tk.Tk):
                 "Configuracion", "Indica etiqueta, puerto, direccion (1-247) e intervalos validos."
             )
             return False
-        if any(item["port"].casefold() == port.casefold() for item in self.monitors.values()):
+        if any(item["worker"].is_alive() and item["port"].casefold() == port.casefold()
+               for item in self.monitors.values()):
             messagebox.showwarning("Puerto en uso", f"{port} ya se esta monitoreando.")
             return False
-        if any(item["tag"].casefold() == source_tag.casefold()
+        if any(item["worker"].is_alive() and item["tag"].casefold() == source_tag.casefold()
                for item in self.monitors.values()):
             messagebox.showwarning("Etiqueta repetida", "Usa una etiqueta distinta para cada puerto.")
             return False
+        previous = self.store.latest_session(source_tag, port)
+        if previous:
+            resume = messagebox.askyesnocancel(
+                "Historial encontrado",
+                f"Hay datos anteriores de {source_tag} ({port}), iniciados el {previous[1]}.\n\n"
+                "Sí: retomar esa sesion.\nNo: comenzar una sesion nueva.\n"
+                "Cancelar: no iniciar la escucha.",
+            )
+            if resume is None:
+                return False
+            if resume:
+                session_id = previous[0]
+                self.store.resume_session(session_id)
+            else:
+                session_id = self.store.create_session(source_tag, port)
+        else:
+            session_id = self.store.create_session(source_tag, port)
         monitor_id = str(self.next_monitor_id)
         self.next_monitor_id += 1
         stop_event = threading.Event()
         worker = PzemWorker(
-            monitor_id, source_tag, port, address, interval, retry_interval,
+            monitor_id, session_id, source_tag, port, address, interval, retry_interval,
             self.messages, stop_event
         )
         self.monitors[monitor_id] = {"tag": source_tag, "port": port, "worker": worker,
                                      "stop_event": stop_event, "retry": retry_interval,
-                                     "outage": False}
+                                     "outage": False, "session_id": session_id}
         self.monitor_list.insert("", "end", iid=monitor_id,
                                  values=(source_tag, port, "Conectando", "--"))
         self.monitor_list.selection_set(monitor_id)
@@ -439,6 +545,7 @@ class MonitorApp(tk.Tk):
         ):
             return
         monitor["stop_event"].set()
+        self.store.close_session(monitor["session_id"])
         self.monitor_list.item(monitor_id, values=(monitor["tag"], monitor["port"],
                                                     "Detenido", "--"))
         self.alert.set(f"{monitor['tag']}: monitoreo detenido")
@@ -450,6 +557,77 @@ class MonitorApp(tk.Tk):
         if selected:
             self.selected_monitor_id = selected[0]
             self.draw_graph()
+
+    def show_history(self):
+        dialog = tk.Toplevel(self)
+        dialog.title("Historial de sesiones")
+        dialog.geometry("850x420")
+        dialog.configure(background=COLORS["background"])
+        frame = ttk.Frame(dialog, padding=12)
+        frame.pack(fill="both", expand=True)
+        history = ttk.Treeview(
+            frame, columns=("tag", "port", "start", "end", "records"),
+            show="headings", height=12
+        )
+        for column, title, width in (("tag", "Etiqueta", 150), ("port", "Puerto", 80),
+                                     ("start", "Inicio", 150), ("end", "Fin", 150),
+                                     ("records", "Registros", 80)):
+            history.heading(column, text=title)
+            history.column(column, width=width, anchor="center")
+        history.pack(fill="both", expand=True)
+
+        def reload_history():
+            history.delete(*history.get_children())
+            active_sessions = {item["session_id"] for item in self.monitors.values()
+                               if item["worker"].is_alive()}
+            for session_id, tag, port, started, ended, records in self.store.session_history():
+                end_text = "ACTIVA" if session_id in active_sessions else (ended or "Sin cierre")
+                history.insert("", "end", iid=str(session_id),
+                               values=(tag, port, started, end_text, records))
+
+        def selected_session():
+            selected = history.selection()
+            if not selected:
+                messagebox.showinfo("Historial", "Selecciona una sesion.", parent=dialog)
+                return None
+            return int(selected[0])
+
+        def export_selected():
+            session_id = selected_session()
+            if session_id is None:
+                return
+            destination = filedialog.asksaveasfilename(
+                parent=dialog, defaultextension=".csv",
+                initialfile=f"sesion_{session_id}.csv", filetypes=(("CSV", "*.csv"),)
+            )
+            if destination:
+                self.store.export_session_csv(session_id, destination)
+                messagebox.showinfo("Historial", "Sesion exportada correctamente.", parent=dialog)
+
+        def delete_selected():
+            session_id = selected_session()
+            if session_id is None:
+                return
+            if any(item["session_id"] == session_id and item["worker"].is_alive()
+                   for item in self.monitors.values()):
+                messagebox.showwarning("Historial", "No se puede eliminar una sesion activa.",
+                                       parent=dialog)
+                return
+            if messagebox.askyesno(
+                "Eliminar sesion",
+                "Se eliminaran permanentemente sus registros de SQLite y su CSV automatico.\n\n"
+                "¿Deseas continuar?", parent=dialog
+            ):
+                self.store.delete_session(session_id)
+                reload_history()
+
+        buttons = ttk.Frame(frame)
+        buttons.pack(fill="x", pady=(10, 0))
+        ttk.Button(buttons, text="EXPORTAR SELECCIONADA",
+                   command=export_selected).pack(side="left")
+        ttk.Button(buttons, text="ELIMINAR SELECCIONADA",
+                   command=delete_selected).pack(side="right")
+        reload_history()
 
     def process_messages(self):
         try:
@@ -508,7 +686,10 @@ class MonitorApp(tk.Tk):
         tag = None
         if self.selected_monitor_id in self.monitors:
             tag = self.monitors[self.selected_monitor_id]["tag"]
-        rows = self.store.recent(tag)
+        session_id = None
+        if self.selected_monitor_id in self.monitors:
+            session_id = self.monitors[self.selected_monitor_id]["session_id"]
+        rows = self.store.recent(tag, session_id=session_id)
         width, height = self.canvas.winfo_width(), self.canvas.winfo_height()
         margin = 35
         if len(rows) < 2 or width <= 2 * margin:
@@ -546,7 +727,9 @@ class MonitorApp(tk.Tk):
         ):
             return
         for monitor in self.monitors.values():
-            monitor["stop_event"].set()
+            if monitor["worker"].is_alive():
+                monitor["stop_event"].set()
+                self.store.close_session(monitor["session_id"])
         for monitor in self.monitors.values():
             if monitor["worker"].is_alive():
                 monitor["worker"].join(timeout=1)

@@ -15,6 +15,16 @@ gráfica; puedes detener sólo el puerto seleccionado sin afectar los demás.
 No se permite abrir dos veces el mismo COM ni repetir una etiqueta mientras esa
 escucha esté configurada.
 
+Si ya existen datos para la misma etiqueta y puerto, la aplicación pregunta si
+se desea **retomar** la última sesión, **comenzar una nueva** o cancelar. Esta
+pregunta no aparece cuando el puerto ya está activo, porque no es posible abrir
+dos veces el mismo COM.
+
+El botón **HISTORIAL** muestra las sesiones anteriores con sus fechas y cantidad
+de registros. Desde ahí se puede exportar una sola sesión o eliminarla. Una
+sesión activa nunca puede eliminarse. Compilar o instalar una versión nueva no
+borra el historial automáticamente.
+
 ## Comportamiento ante un corte
 
 Si el PZEM pierde energía o comunicación, el programa no se cierra ni borra datos:
@@ -41,7 +51,7 @@ Los datos se confirman en disco después de cada lectura o evento:
 | --- | --- |
 | `C:\Users\<usuario>\PZEM Monitor\lecturas.db` | Historial completo SQLite |
 | `C:\Users\<usuario>\PZEM Monitor\pzem_monitor.log` | Lecturas, errores y recuperaciones |
-| `C:\Users\<usuario>\PZEM Monitor\csv\lecturas_<etiqueta>.csv` | Copia CSV automática por etiqueta |
+| `C:\Users\<usuario>\PZEM Monitor\csv\lecturas_<etiqueta>_sesion_<id>.csv` | Copia CSV automática por sesión |
 
 Cada lectura y error se confirma inmediatamente en SQLite y se agrega al CSV
 automático correspondiente. El botón **Exportar CSV** también permite generar un

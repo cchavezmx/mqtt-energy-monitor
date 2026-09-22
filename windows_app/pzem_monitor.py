@@ -242,8 +242,8 @@ class MonitorApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("PZEM-004T Monitor | INTECSA")
-        self.geometry("1050x720")
-        self.minsize(850, 560)
+        self.geometry("1050x620")
+        self.minsize(800, 500)
         self.configure(background=COLORS["background"])
         self._configure_theme()
         configure_logging()
@@ -307,6 +307,8 @@ class MonitorApp(tk.Tk):
         ttk.Button(actions, text="+ AGREGAR PUERTO", command=self.show_add_port).pack(fill="x")
         ttk.Button(actions, text="DETENER SELECCIONADO",
                    command=self.stop_selected).pack(fill="x", pady=(8, 0))
+        ttk.Button(actions, text="EXPORTAR CSV",
+                   command=self.export_csv).pack(fill="x", pady=(8, 0))
 
         self.alert = tk.StringVar(value="Agrega un puerto para comenzar")
         self.alert_label = tk.Label(
@@ -331,7 +333,7 @@ class MonitorApp(tk.Tk):
 
         graph_box = ttk.LabelFrame(self, text="Potencia reciente", padding=8)
         graph_box.pack(fill="both", expand=True, padx=20, pady=8)
-        self.canvas = tk.Canvas(graph_box, background=COLORS["field"], height=230,
+        self.canvas = tk.Canvas(graph_box, background=COLORS["field"], height=170,
                                 highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Configure>", lambda _event: self.draw_graph())
@@ -340,7 +342,6 @@ class MonitorApp(tk.Tk):
         footer.pack(fill="x")
         self.status = tk.StringVar(value=f"Datos locales: {DB_PATH} | CSV: {CSV_DIR}")
         ttk.Label(footer, textvariable=self.status).pack(side="left")
-        ttk.Button(footer, text="Exportar CSV", command=self.export_csv).pack(side="right")
         ttk.Label(footer, text="Made by INTECSA", font=("Segoe UI", 9, "bold")).pack(
             side="right", padx=16
         )

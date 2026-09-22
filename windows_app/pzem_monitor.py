@@ -112,7 +112,7 @@ class PzemWorker(threading.Thread):
 class MonitorApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("PZEM-004T Monitor")
+        self.title("PZEM-004T Monitor | INTECSA")
         self.geometry("850x610")
         self.minsize(760, 540)
         self.store = ReadingStore(DB_PATH)
@@ -167,6 +167,9 @@ class MonitorApp(tk.Tk):
         self.status = tk.StringVar(value=f"Datos: {DB_PATH}")
         ttk.Label(footer, textvariable=self.status).pack(side="left")
         ttk.Button(footer, text="Exportar CSV", command=self.export_csv).pack(side="right")
+        ttk.Label(footer, text="Made by INTECSA", font=("Segoe UI", 9, "bold")).pack(
+            side="right", padx=16
+        )
 
     def refresh_ports(self):
         ports = [port.device for port in list_ports.comports()]

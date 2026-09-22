@@ -10,6 +10,54 @@ exports CSV reports, and does not require an ESP32, Wi-Fi, or MQTT.
 
 ---
 
+## 🪟 Crear la aplicación para Windows
+
+La aplicación de escritorio lee el PZEM-004T directamente desde un puerto COM
+mediante un adaptador USB-TTL. No necesita ESP32, Wi-Fi ni un broker MQTT.
+
+### Requisitos
+
+1. Instala [Python 3 para Windows](https://www.python.org/downloads/windows/).
+2. Durante la instalación, activa **Add Python to PATH**.
+3. Descarga o clona este repositorio.
+
+### Generar el archivo EXE
+
+Abre PowerShell en la carpeta del repositorio y ejecuta:
+
+```powershell
+cd .\windows_app
+PowerShell -ExecutionPolicy Bypass -File .\build.ps1
+```
+
+El script crea un entorno virtual, instala PySerial y PyInstaller, y genera:
+
+```text
+windows_app\dist\PZEM-Monitor.exe
+```
+
+No es necesario tener Python instalado en las computadoras donde posteriormente
+se ejecute ese `.exe`.
+
+### Probar la aplicación
+
+1. Conecta el adaptador USB del PZEM y revisa su puerto en el Administrador de dispositivos.
+2. Cierra cualquier otro programa que esté usando ese puerto.
+3. Ejecuta `PZEM-Monitor.exe` y selecciona, por ejemplo, `COM9`.
+4. Conserva la dirección `1`, selecciona el intervalo y pulsa **CONECTAR**.
+5. Usa **Exportar CSV** para crear un reporte compatible con Excel.
+
+Las lecturas se conservan automáticamente en:
+
+```text
+C:\Users\<usuario>\PZEM Monitor\lecturas.db
+```
+
+Si PowerShell indica que `py` no existe, reinstala Python habilitando su opción
+de PATH. El primer build necesita conexión a Internet para descargar dependencias.
+
+---
+
 ## ⚙️ Key Features  (Características Principales)
 
 * **Real-time reading** of Voltage (V), Current (A), Active Power (W), and Accumulated Energy (kWh).

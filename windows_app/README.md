@@ -1,8 +1,19 @@
 # PZEM Monitor para Windows
 
-Esta aplicación lee un PZEM-004T v3.0 conectado mediante un adaptador USB-TTL,
-guarda todas las lecturas en SQLite, muestra una gráfica de potencia y exporta CSV.
+Esta aplicación lee uno o varios PZEM-004T v3.0 conectados mediante adaptadores
+USB-TTL, guarda todas las lecturas en SQLite, muestra una gráfica de potencia y
+genera CSV.
 No requiere ESP32, Wi-Fi ni MQTT.
+
+## Monitorear varios puertos
+
+Pulsa **+ AGREGAR PUERTO**, elige el COM y asigna una etiqueta descriptiva, por
+ejemplo `Tablero norte`. Cada puerto tiene su propio hilo de lectura, reintentos,
+alertas de comunicación y gráfica. Selecciona una fila para ver sus valores y su
+gráfica; puedes detener sólo el puerto seleccionado sin afectar los demás.
+
+No se permite abrir dos veces el mismo COM ni repetir una etiqueta mientras esa
+escucha esté configurada.
 
 ## Comportamiento ante un corte
 
@@ -30,10 +41,13 @@ Los datos se confirman en disco después de cada lectura o evento:
 | --- | --- |
 | `C:\Users\<usuario>\PZEM Monitor\lecturas.db` | Historial completo SQLite |
 | `C:\Users\<usuario>\PZEM Monitor\pzem_monitor.log` | Lecturas, errores y recuperaciones |
+| `C:\Users\<usuario>\PZEM Monitor\csv\lecturas_<etiqueta>.csv` | Copia CSV automática por etiqueta |
 
-El botón **Exportar CSV** genera un reporte para Excel que incluye las columnas
-`estado` y `detalle`. Antes de detener o cerrar, la interfaz advierte que dejará de
-registrar; todo lo guardado anteriormente se conserva.
+Cada lectura y error se confirma inmediatamente en SQLite y se agrega al CSV
+automático correspondiente. El botón **Exportar CSV** también permite generar un
+reporte consolidado para Excel, con las columnas `etiqueta`, `puerto`, `estado` y
+`detalle`. Antes de detener o cerrar, la interfaz advierte que dejará de registrar;
+todo lo guardado anteriormente se conserva aunque el equipo se apague después.
 
 ## Ejecutar desde el código
 

@@ -1,6 +1,7 @@
 import struct
 import tempfile
 import unittest
+import csv
 from pathlib import Path
 
 from pzem_monitor import ReadingStore, build_request, modbus_crc, parse_response
@@ -62,6 +63,26 @@ class PzemProtocolTests(unittest.TestCase):
                 "SELECT status, detail FROM readings"
             ).fetchone()
             self.assertEqual(row, ("OK", None))
+
+    def test_store_separates_sources_and_creates_automatic_csv(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ReadingStore(Path(directory) / "lecturas.db")
+            for tag, port, power in (("Tablero norte", "COM3", 4.5),
+                                     ("Tablero sur", "COM4", 8.0)):
+                store.add({
+                    "timestamp": "2026-09-22 12:00:00", "source_tag": tag,
+                    "port": port, "voltage": 127.0, "current": 0.1,
+                    "power": power, "energy": 0.005, "frequency": 60.0,
+                    "power_factor": 1.0,
+                })
+
+            self.assertEqual(store.recent("Tablero norte"),
+                             [("2026-09-22 12:00:00", 4.5)])
+            csv_path = Path(directory) / "csv" / "lecturas_Tablero_norte.csv"
+            with csv_path.open(encoding="utf-8-sig", newline="") as input_file:
+                rows = list(csv.reader(input_file))
+            self.assertEqual(rows[0][:3], ["fecha", "etiqueta", "puerto"])
+            self.assertEqual(rows[1][1:3], ["Tablero norte", "COM3"])
 
 
 if __name__ == "__main__":

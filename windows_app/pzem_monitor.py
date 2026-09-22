@@ -393,8 +393,6 @@ class MonitorApp(tk.Tk):
         ttk.Button(actions, text="+ AGREGAR PUERTO", command=self.show_add_port).pack(fill="x")
         ttk.Button(actions, text="DETENER SELECCIONADO",
                    command=self.stop_selected).pack(fill="x", pady=(8, 0))
-        ttk.Button(actions, text="EXPORTAR CSV",
-                   command=self.export_csv).pack(fill="x", pady=(8, 0))
         ttk.Button(actions, text="HISTORIAL",
                    command=self.show_history).pack(fill="x", pady=(8, 0))
 
@@ -517,11 +515,14 @@ class MonitorApp(tk.Tk):
         )
         self.monitors[monitor_id] = {"tag": source_tag, "port": port, "worker": worker,
                                      "stop_event": stop_event, "retry": retry_interval,
-                                     "outage": False, "session_id": session_id}
+                                     "outage": False, "session_id": session_id,
+                                     "last_reading": None, "state": "Conectando"}
         self.monitor_list.insert("", "end", iid=monitor_id,
                                  values=(source_tag, port, "Conectando", "--"))
         self.monitor_list.selection_set(monitor_id)
         self.selected_monitor_id = monitor_id
+        self.show_selected_values()
+        self.draw_graph()
         worker.start()
         self.alert.set(f"{source_tag} ({port}): monitoreando")
         self.alert_label.configure(fg=COLORS["accent"])
@@ -546,17 +547,39 @@ class MonitorApp(tk.Tk):
             return
         monitor["stop_event"].set()
         self.store.close_session(monitor["session_id"])
+        monitor["state"] = "Detenido"
         self.monitor_list.item(monitor_id, values=(monitor["tag"], monitor["port"],
                                                     "Detenido", "--"))
         self.alert.set(f"{monitor['tag']}: monitoreo detenido")
         self.alert_label.configure(fg=COLORS["muted"])
+        self.show_selected_values()
         LOGGER.info("Monitoreo detenido | %s | %s", monitor["tag"], monitor["port"])
 
     def select_monitor(self, _event=None):
         selected = self.monitor_list.selection()
         if selected:
             self.selected_monitor_id = selected[0]
+            self.show_selected_values()
             self.draw_graph()
+
+    def show_selected_values(self):
+        monitor = self.monitors.get(self.selected_monitor_id)
+        if monitor is None:
+            return
+        reading = monitor["last_reading"]
+        if reading is not None and monitor["state"] == "Monitoreando":
+            for key, (variable, unit) in self.values.items():
+                decimals = 4 if key == "energy" else 3 if key == "current" else 2
+                variable.set(f"{reading[key]:.{decimals}f} {unit}")
+            self.status.set(f"{monitor['tag']} | Ultima lectura: {reading['timestamp']}")
+        elif monitor["state"] == "SIN RESPUESTA":
+            for variable, unit in self.values.values():
+                variable.set(f"SIN RESPUESTA {unit}")
+            self.status.set(f"{monitor['tag']} | Sin respuesta; reintentando")
+        else:
+            for variable, unit in self.values.values():
+                variable.set(f"-- {unit}")
+            self.status.set(f"{monitor['tag']} ({monitor['port']}) | {monitor['state']}")
 
     def show_history(self):
         dialog = tk.Toplevel(self)
@@ -645,13 +668,12 @@ class MonitorApp(tk.Tk):
                         payload["energy"], payload["frequency"], payload["power_factor"]
                     )
                     monitor["outage"] = False
+                    monitor["last_reading"] = payload
+                    monitor["state"] = "Monitoreando"
                     self.monitor_list.item(monitor_id, values=(monitor["tag"], monitor["port"],
                                                                "Monitoreando", payload["timestamp"]))
                     if monitor_id == self.selected_monitor_id:
-                        for key, (variable, unit) in self.values.items():
-                            decimals = 4 if key == "energy" else 3 if key == "current" else 2
-                            variable.set(f"{payload[key]:.{decimals}f} {unit}")
-                        self.status.set(f"{monitor['tag']} | Ultima lectura: {payload['timestamp']}")
+                        self.show_selected_values()
                         self.draw_graph()
                 elif kind == "outage":
                     self.store.add_event(payload)
@@ -659,10 +681,9 @@ class MonitorApp(tk.Tk):
                                    payload["port"], payload["detail"])
                     self.monitor_list.item(monitor_id, values=(monitor["tag"], monitor["port"],
                                                                "SIN RESPUESTA", payload["timestamp"]))
+                    monitor["state"] = "SIN RESPUESTA"
                     if monitor_id == self.selected_monitor_id:
-                        for variable, unit in self.values.values():
-                            variable.set(f"SIN RESPUESTA {unit}")
-                        self.status.set(f"Sin respuesta; nuevo intento en {monitor['retry']:g} s")
+                        self.show_selected_values()
                     if not monitor["outage"]:
                         monitor["outage"] = True
                         self.bell()
@@ -671,6 +692,7 @@ class MonitorApp(tk.Tk):
                 elif kind == "recovered":
                     self.store.add_event(payload)
                     monitor["outage"] = False
+                    monitor["state"] = "Monitoreando"
                     LOGGER.info("RECUPERADO | %s | %s | %s", payload["source_tag"],
                                 payload["port"], payload["detail"])
                     self.alert.set(f"{monitor['tag']}: conexion recuperada — monitoreando")

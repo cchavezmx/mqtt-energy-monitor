@@ -54,10 +54,10 @@ Los datos se confirman en disco después de cada lectura o evento:
 | `C:\Users\<usuario>\PZEM Monitor\csv\lecturas_<etiqueta>_sesion_<id>.csv` | Copia CSV automática por sesión |
 
 Cada lectura y error se confirma inmediatamente en SQLite y se agrega al CSV
-automático correspondiente. El botón **Exportar CSV** también permite generar un
-reporte consolidado para Excel, con las columnas `etiqueta`, `puerto`, `estado` y
-`detalle`. Antes de detener o cerrar, la interfaz advierte que dejará de registrar;
-todo lo guardado anteriormente se conserva aunque el equipo se apague después.
+automático correspondiente. Desde **HISTORIAL** se puede exportar una sesión para
+Excel con las columnas `etiqueta`, `puerto`, `estado` y `detalle`. Antes de detener
+o cerrar, la interfaz advierte que dejará de registrar; todo lo guardado
+anteriormente se conserva aunque el equipo se apague después.
 
 ## Ejecutar desde el código
 

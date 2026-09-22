@@ -1,0 +1,7 @@
+.pio/
+__pycache__/
+*.py[cod]
+windows_app/.venv/
+windows_app/build/
+windows_app/dist/
+windows_app/*.spec

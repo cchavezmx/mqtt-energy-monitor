@@ -15,6 +15,36 @@ exports CSV reports, and does not require an ESP32, Wi-Fi, or MQTT.
 La aplicación de escritorio lee el PZEM-004T directamente desde un puerto COM
 mediante un adaptador USB-TTL. No necesita ESP32, Wi-Fi ni un broker MQTT.
 
+### Continuidad ante cortes y desconexiones
+
+Esta es la función principal de la aplicación. Si el PZEM se apaga, se desconecta
+el USB o deja de responder:
+
+1. La aplicación permanece abierta y muestra una alerta roja.
+2. Guarda un evento `SIN_RESPUESTA` con fecha, hora y causa técnica.
+3. Reintenta la conexión automáticamente según el intervalo configurado.
+4. Cuando vuelve la comunicación, registra `RECUPERADO` y la duración estimada.
+5. Continúa midiendo sin borrar el historial ni la gráfica anterior.
+
+Durante la interrupción no se inventan valores de `0 V`: una falta de respuesta
+también puede ser causada por un cable USB desconectado. Para registrar el corte,
+la computadora debe permanecer encendida, idealmente una laptop con batería o una
+PC conectada a un UPS.
+
+En **Configuración** se pueden ajustar independientemente:
+
+- **Medición (s):** frecuencia de las lecturas normales.
+- **Reconexión (s):** tiempo entre intentos cuando el PZEM no responde.
+
+Cada lectura se confirma inmediatamente en la base de datos. Detener o cerrar la
+aplicación solicita confirmación, pero no elimina datos guardados.
+
+| Archivo | Contenido |
+| --- | --- |
+| `C:\Users\<usuario>\PZEM Monitor\lecturas.db` | Mediciones, cortes y recuperaciones |
+| `C:\Users\<usuario>\PZEM Monitor\pzem_monitor.log` | Registro técnico para diagnóstico |
+| CSV elegido por el usuario | Reporte para Excel con métricas y eventos |
+
 ### Requisitos
 
 1. Instala [Python 3 para Windows](https://www.python.org/downloads/windows/).
@@ -46,12 +76,6 @@ se ejecute ese `.exe`.
 3. Ejecuta `PZEM-Monitor.exe` y selecciona, por ejemplo, `COM9`.
 4. Conserva la dirección `1`, selecciona el intervalo y pulsa **CONECTAR**.
 5. Usa **Exportar CSV** para crear un reporte compatible con Excel.
-
-Las lecturas se conservan automáticamente en:
-
-```text
-C:\Users\<usuario>\PZEM Monitor\lecturas.db
-```
 
 Si PowerShell indica que `py` no existe, reinstala Python habilitando su opción
 de PATH. El primer build necesita conexión a Internet para descargar dependencias.

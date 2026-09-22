@@ -1,4 +1,5 @@
 import csv
+import logging
 import queue
 import sqlite3
 import struct
@@ -15,6 +16,17 @@ from serial.tools import list_ports
 
 APP_DIR = Path.home() / "PZEM Monitor"
 DB_PATH = APP_DIR / "lecturas.db"
+LOG_PATH = APP_DIR / "pzem_monitor.log"
+LOGGER = logging.getLogger("pzem_monitor")
+
+
+def configure_logging():
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    if not LOGGER.handlers:
+        handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+        LOGGER.addHandler(handler)
+        LOGGER.setLevel(logging.INFO)
 
 
 def modbus_crc(data: bytes) -> int:
@@ -57,78 +69,127 @@ class ReadingStore:
         self.connection.execute(
             """CREATE TABLE IF NOT EXISTS readings (
             timestamp TEXT NOT NULL, voltage REAL, current REAL, power REAL,
-            energy REAL, frequency REAL, power_factor REAL)"""
+            energy REAL, frequency REAL, power_factor REAL,
+            status TEXT NOT NULL DEFAULT 'OK', detail TEXT)"""
         )
+        columns = {row[1] for row in self.connection.execute("PRAGMA table_info(readings)")}
+        if "status" not in columns:
+            self.connection.execute(
+                "ALTER TABLE readings ADD COLUMN status TEXT NOT NULL DEFAULT 'OK'"
+            )
+        if "detail" not in columns:
+            self.connection.execute("ALTER TABLE readings ADD COLUMN detail TEXT")
         self.connection.commit()
 
     def add(self, reading: dict):
         self.connection.execute(
-            "INSERT INTO readings VALUES (?, ?, ?, ?, ?, ?, ?)",
+            """INSERT INTO readings
+            (timestamp, voltage, current, power, energy, frequency, power_factor, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'OK')""",
             (reading["timestamp"], reading["voltage"], reading["current"],
              reading["power"], reading["energy"], reading["frequency"],
              reading["power_factor"]),
         )
         self.connection.commit()
 
+    def add_event(self, event: dict):
+        self.connection.execute(
+            "INSERT INTO readings (timestamp, status, detail) VALUES (?, ?, ?)",
+            (event["timestamp"], event["status"], event["detail"]),
+        )
+        self.connection.commit()
+
     def recent(self, limit=120):
         return self.connection.execute(
-            "SELECT timestamp, power FROM readings ORDER BY rowid DESC LIMIT ?", (limit,)
+            """SELECT timestamp, power FROM readings
+            WHERE status = 'OK' AND power IS NOT NULL
+            ORDER BY rowid DESC LIMIT ?""", (limit,)
         ).fetchall()[::-1]
 
     def export_csv(self, destination: str):
-        rows = self.connection.execute("SELECT * FROM readings ORDER BY timestamp").fetchall()
+        rows = self.connection.execute(
+            """SELECT timestamp, voltage, current, power, energy, frequency,
+            power_factor, status, detail FROM readings ORDER BY rowid"""
+        ).fetchall()
         with open(destination, "w", newline="", encoding="utf-8-sig") as output:
             writer = csv.writer(output)
             writer.writerow(("fecha", "voltaje_V", "corriente_A", "potencia_W",
-                             "energia_kWh", "frecuencia_Hz", "factor_potencia"))
+                             "energia_kWh", "frecuencia_Hz", "factor_potencia",
+                             "estado", "detalle"))
             writer.writerows(rows)
 
 
 class PzemWorker(threading.Thread):
-    def __init__(self, port, address, interval, messages, stop_event):
+    def __init__(self, port, address, interval, retry_interval, messages, stop_event):
         super().__init__(daemon=True)
         self.port = port
         self.address = address
         self.interval = interval
+        self.retry_interval = retry_interval
         self.messages = messages
         self.stop_event = stop_event
 
     def run(self):
-        try:
-            with serial.Serial(self.port, 9600, bytesize=8, parity="N", stopbits=1,
-                               timeout=1) as connection:
-                self.messages.put(("status", f"Conectado a {self.port}"))
-                while not self.stop_event.is_set():
-                    connection.reset_input_buffer()
-                    connection.write(build_request(self.address))
-                    reading = parse_response(connection.read(25), self.address)
-                    reading["timestamp"] = datetime.now().isoformat(sep=" ", timespec="seconds")
-                    self.messages.put(("reading", reading))
-                    self.stop_event.wait(self.interval)
-        except Exception as error:
-            self.messages.put(("error", str(error)))
+        outage_started = None
+        while not self.stop_event.is_set():
+            try:
+                with serial.Serial(self.port, 9600, bytesize=8, parity="N", stopbits=1,
+                                   timeout=1) as connection:
+                    while not self.stop_event.is_set():
+                        connection.reset_input_buffer()
+                        connection.write(build_request(self.address))
+                        reading = parse_response(connection.read(25), self.address)
+                        reading["timestamp"] = datetime.now().isoformat(
+                            sep=" ", timespec="seconds"
+                        )
+                        if outage_started is not None:
+                            duration = int(time.monotonic() - outage_started)
+                            self.messages.put(("recovered", {
+                                "timestamp": reading["timestamp"],
+                                "status": "RECUPERADO",
+                                "detail": f"Interrupcion de {duration} segundos",
+                                "duration": duration,
+                            }))
+                            outage_started = None
+                        self.messages.put(("reading", reading))
+                        self.stop_event.wait(self.interval)
+            except Exception as error:
+                if self.stop_event.is_set():
+                    break
+                if outage_started is None:
+                    outage_started = time.monotonic()
+                event = {
+                    "timestamp": datetime.now().isoformat(sep=" ", timespec="seconds"),
+                    "status": "SIN_RESPUESTA",
+                    "detail": str(error),
+                }
+                self.messages.put(("outage", event))
+                self.stop_event.wait(self.retry_interval)
 
 
 class MonitorApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("PZEM-004T Monitor | INTECSA")
-        self.geometry("850x610")
-        self.minsize(760, 540)
+        self.geometry("1000x650")
+        self.minsize(850, 560)
+        configure_logging()
         self.store = ReadingStore(DB_PATH)
         self.messages = queue.Queue()
         self.stop_event = threading.Event()
         self.worker = None
+        self.outage_active = False
         self.values = {}
         self._build_ui()
         self.refresh_ports()
         self.draw_graph()
         self.after(100, self.process_messages)
         self.protocol("WM_DELETE_WINDOW", self.close)
+        LOGGER.info("Aplicacion iniciada")
 
     def _build_ui(self):
-        controls = ttk.Frame(self, padding=10)
-        controls.pack(fill="x")
+        controls = ttk.LabelFrame(self, text="Configuracion", padding=10)
+        controls.pack(fill="x", padx=12, pady=(10, 0))
         ttk.Label(controls, text="Puerto COM:").pack(side="left")
         self.port = ttk.Combobox(controls, width=15, state="readonly")
         self.port.pack(side="left", padx=5)
@@ -136,11 +197,22 @@ class MonitorApp(tk.Tk):
         ttk.Label(controls, text="Direccion:").pack(side="left", padx=(15, 2))
         self.address = tk.IntVar(value=1)
         ttk.Spinbox(controls, from_=1, to=247, textvariable=self.address, width=5).pack(side="left")
-        ttk.Label(controls, text="Intervalo (s):").pack(side="left", padx=(15, 2))
+        ttk.Label(controls, text="Medicion (s):").pack(side="left", padx=(15, 2))
         self.interval = tk.DoubleVar(value=3)
         ttk.Spinbox(controls, from_=1, to=3600, textvariable=self.interval, width=6).pack(side="left")
+        ttk.Label(controls, text="Reconexion (s):").pack(side="left", padx=(15, 2))
+        self.retry_interval = tk.DoubleVar(value=5)
+        ttk.Spinbox(
+            controls, from_=1, to=3600, textvariable=self.retry_interval, width=6
+        ).pack(side="left")
         self.connect_button = ttk.Button(controls, text="CONECTAR", command=self.toggle_connection)
         self.connect_button.pack(side="right")
+
+        self.alert = tk.StringVar(value="Listo para conectar")
+        self.alert_label = tk.Label(
+            self, textvariable=self.alert, fg="#555555", font=("Segoe UI", 10, "bold")
+        )
+        self.alert_label.pack(fill="x", padx=20, pady=(6, 0))
 
         readings = ttk.Frame(self, padding=(20, 10))
         readings.pack(fill="x")
@@ -184,16 +256,44 @@ class MonitorApp(tk.Tk):
         if not self.port.get():
             messagebox.showwarning("Puerto COM", "Selecciona un puerto COM.")
             return
+        try:
+            address = self.address.get()
+            interval = self.interval.get()
+            retry_interval = self.retry_interval.get()
+            if interval < 1 or retry_interval < 1:
+                raise ValueError
+        except (tk.TclError, ValueError):
+            messagebox.showwarning(
+                "Configuracion", "Direccion e intervalos deben contener valores validos."
+            )
+            return
         self.stop_event.clear()
-        self.worker = PzemWorker(self.port.get(), self.address.get(), self.interval.get(),
-                                 self.messages, self.stop_event)
+        self.worker = PzemWorker(
+            self.port.get(), address, interval, retry_interval, self.messages, self.stop_event
+        )
         self.worker.start()
         self.connect_button.configure(text="DETENER")
+        self.alert.set("Monitoreando")
+        self.alert_label.configure(fg="#16733b")
+        LOGGER.info(
+            "Monitoreo iniciado en %s; medicion=%ss; reconexion=%ss",
+            self.port.get(), interval, retry_interval
+        )
 
-    def disconnect(self):
+    def disconnect(self, ask=True):
+        if ask and not messagebox.askyesno(
+            "Detener monitoreo",
+            "Se dejara de registrar mientras el monitoreo este detenido.\n\n"
+            "Las lecturas, eventos y graficas ya guardados NO se perderan.\n\n"
+            "¿Deseas continuar?",
+        ):
+            return
         self.stop_event.set()
         self.connect_button.configure(text="CONECTAR")
-        self.status.set("Desconectado")
+        self.status.set(f"Monitoreo detenido. Datos conservados en {DB_PATH}")
+        self.alert.set("Monitoreo detenido")
+        self.alert_label.configure(fg="#555555")
+        LOGGER.info("Monitoreo detenido por el usuario")
 
     def process_messages(self):
         try:
@@ -201,16 +301,38 @@ class MonitorApp(tk.Tk):
                 kind, payload = self.messages.get_nowait()
                 if kind == "reading":
                     self.store.add(payload)
+                    LOGGER.info(
+                        "LECTURA | V=%.2f | A=%.3f | W=%.2f | kWh=%.4f | Hz=%.2f | FP=%.2f",
+                        payload["voltage"], payload["current"], payload["power"],
+                        payload["energy"], payload["frequency"], payload["power_factor"]
+                    )
                     for key, (variable, unit) in self.values.items():
                         decimals = 4 if key == "energy" else 3 if key == "current" else 2
                         variable.set(f"{payload[key]:.{decimals}f} {unit}")
                     self.status.set(f"Ultima lectura: {payload['timestamp']}")
                     self.draw_graph()
-                elif kind == "status":
-                    self.status.set(payload)
-                else:
-                    self.disconnect()
-                    messagebox.showerror("Error de comunicacion", payload)
+                elif kind == "outage":
+                    self.store.add_event(payload)
+                    LOGGER.warning("SIN_RESPUESTA | %s", payload["detail"])
+                    for variable, unit in self.values.values():
+                        variable.set(f"SIN RESPUESTA {unit}")
+                    self.status.set(
+                        f"Sin respuesta; nuevo intento en {self.retry_interval.get():g} s"
+                    )
+                    if not self.outage_active:
+                        self.outage_active = True
+                        self.bell()
+                    self.alert.set("⚠ PZEM SIN RESPUESTA — reintentando automaticamente")
+                    self.alert_label.configure(fg="#b42318")
+                elif kind == "recovered":
+                    self.store.add_event(payload)
+                    self.outage_active = False
+                    LOGGER.info("RECUPERADO | %s", payload["detail"])
+                    self.alert.set("Conexion recuperada — monitoreando")
+                    self.alert_label.configure(fg="#16733b")
+                    self.status.set(
+                        f"Conexion recuperada; corte de {payload['duration']} segundos"
+                    )
         except queue.Empty:
             pass
         self.after(100, self.process_messages)
@@ -244,7 +366,17 @@ class MonitorApp(tk.Tk):
             messagebox.showinfo("Exportacion", "Archivo CSV creado correctamente.")
 
     def close(self):
+        if self.worker and self.worker.is_alive() and not messagebox.askyesno(
+            "Cerrar aplicacion",
+            "Al cerrar se dejara de registrar hasta volver a abrir la aplicacion.\n\n"
+            "Todo el historial ya guardado se conservara. ¿Deseas cerrar?",
+        ):
+            return
         self.stop_event.set()
+        if self.worker and self.worker.is_alive():
+            self.worker.join(timeout=2)
+        LOGGER.info("Aplicacion cerrada")
+        self.store.connection.close()
         self.destroy()
 
 

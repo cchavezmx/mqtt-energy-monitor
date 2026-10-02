@@ -1,16 +1,34 @@
 # PZEM Monitor para Windows
 
 Esta aplicación lee uno o varios PZEM-004T v3.0 conectados mediante adaptadores
-USB-TTL, guarda todas las lecturas en SQLite, muestra una gráfica de potencia y
+USB-TTL, guarda todas las lecturas en SQLite, muestra un dashboard de widgets y
 genera CSV.
 No requiere ESP32, Wi-Fi ni MQTT.
+
+## Dashboard de widgets
+
+La interfaz principal muestra paneles independientes para cada medida:
+
+| Widget | Dato |
+| --- | --- |
+| Voltaje | V |
+| Corriente | A |
+| Potencia | W |
+| Energía | kWh |
+| Frecuencia | Hz |
+| Factor de potencia | |
+| Potencia reciente | Gráfica de potencia en el tiempo |
+
+Cada widget incluye su propio *sparkline* (mini gráfica) con las últimas
+lecturas. El panel de **Potencia reciente** muestra la gráfica completa del
+puerto seleccionado.
 
 ## Monitorear varios puertos
 
 Pulsa **+ AGREGAR PUERTO**, elige el COM y asigna una etiqueta descriptiva, por
 ejemplo `Tablero norte`. Cada puerto tiene su propio hilo de lectura, reintentos,
-alertas de comunicación y gráfica. Selecciona una fila para ver sus valores y su
-gráfica; puedes detener sólo el puerto seleccionado sin afectar los demás.
+alertas de comunicación y gráfica. Selecciona un puerto en la barra lateral para
+ver sus widgets; puedes detener sólo el puerto seleccionado sin afectar los demás.
 
 No se permite abrir dos veces el mismo COM ni repetir una etiqueta mientras esa
 escucha esté configurada.
@@ -70,8 +88,9 @@ py -m pip install pyserial
 py pzem_monitor.py
 ```
 
-Selecciona el puerto (por ejemplo `COM9`), conserva dirección `1` y pulsa
-**CONECTAR**. Ningun otro programa puede tener abierto el mismo puerto.
+Selecciona el puerto (por ejemplo `COM9`), conserva dirección `1`, ajusta los
+intervalos y pulsa **INICIAR ESCUCHA**. Ningun otro programa puede tener abierto
+el mismo puerto.
 
 ## Generar el EXE
 

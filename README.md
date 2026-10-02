@@ -1,19 +1,31 @@
----
 # mqtt-energy-monitor
-ESP32 and PZEM-004T Energy Monitor for Home Assistant
 
-This repository contains the source code (firmware) to build a DIY electricity consumption monitor. It uses an ESP32 microcontroller to read measurements from a PZEM-004T v3.0 sensor and sends them to an MQTT broker, allowing seamless integration with Home Assistant and its energy dashboard.
+Monitor de energía con el sensor **PZEM-004T v3.0**. Este repositorio ofrece dos
+formas de usarlo:
 
-For a PZEM connected directly to a Windows COM port, use the application in
-[`windows_app/`](windows_app/README.md). It stores readings, graphs recent power,
-exports CSV reports, and does not require an ESP32, Wi-Fi, or MQTT.
+1. **Aplicación Windows por USB** (caso actual recomendado): lee el PZEM desde un
+   puerto COM con un adaptador USB-TTL, guarda todo en SQLite, muestra un
+   dashboard de widgets, gráficas y exporta CSV. **No requiere ESP32, Wi-Fi ni MQTT**.
+2. **Firmware ESP32 + MQTT** (alternativa para Home Assistant): envía las lecturas
+   a un broker MQTT para integrarse con el dashboard de energía de Home Assistant.
+
+Para el uso directo en PC con Windows, sigue las instrucciones de
+[`windows_app/`](windows_app/README.md). La sección inferior describe la versión
+ESP32/MQTT para quien prefiera conectividad inalámbrica y Home Assistant.
 
 ---
 
-## 🪟 Crear la aplicación para Windows
+## 🪟 Opción recomendada: aplicación para Windows (USB)
 
-La aplicación de escritorio lee el PZEM-004T directamente desde un puerto COM
-mediante un adaptador USB-TTL. No necesita ESP32, Wi-Fi ni un broker MQTT.
+Para monitorear el PZEM-004T desde una computadora con Windows, usa la aplicación
+en `windows_app/`. Lee directamente desde un puerto COM con un adaptador USB-TTL,
+por lo que **no se requiere el firmware del ESP32** ni configurar Wi-Fi ni MQTT.
+
+El flujo completo es:
+
+1. Descarga o clona el repositorio.
+2. Genera el ejecutable con `build.ps1`.
+3. Corre `PZEM-Monitor.exe` en la PC donde esté conectado el PZEM por USB.
 
 ### Continuidad ante cortes y desconexiones
 
@@ -84,7 +96,17 @@ de PATH. El primer build necesita conexión a Internet para descargar dependenci
 
 ## ⚙️ Key Features  (Características Principales)
 
-* **Real-time reading** of Voltage (V), Current (A), Active Power (W), and Accumulated Energy (kWh).
+### Aplicación Windows (USB)
+
+* **Real-time reading** of Voltage (V), Current (A), Active Power (W), Accumulated Energy (kWh), Frequency (Hz), and Power Factor.
+* **Dashboard de widgets** con mini gráficas en cada medida y gráfica principal de potencia.
+* **Multi-puerto COM**: monitorea varios PZEM al mismo tiempo desde una sola PC.
+* **SQLite local** con historial de sesiones y exportación a CSV.
+* **Continuidad ante cortes**: detecta desconexiones, reintenta automáticamente y registra la duración.
+* **100% local**, sin depender de internet ni de la nube.
+
+### Firmware ESP32 (alternativa para Home Assistant)
+
 * Wireless communication via **Wi-Fi**.
 * **MQTT protocol** for light and efficient communication with home automation systems.
 * Easy integration with the Home Assistant **Energy dashboard**.
@@ -92,7 +114,10 @@ de PATH. El primer build necesita conexión a Internet para descargar dependenci
 
 ---
 
-## 🔧 Required Components (Componentes Necesarios)
+## 🔧 Firmware ESP32: componentes necesarios
+
+Estas secciones describen la versión inalámbrica con ESP32 y MQTT. Si usas la
+aplicación Windows por USB, **no necesitas** este hardware ni estas librerías.
 
 ### Hardware
 
@@ -109,7 +134,7 @@ de PATH. El primer build necesita conexión a Internet para descargar dependenci
 
 ---
 
-## 🛠️ Configuration (Configuración)
+## 🛠️ Firmware ESP32: configuración
 
 Before compiling and uploading the firmware, you must modify the code to include your own credentials in the following lines:
 
@@ -124,11 +149,12 @@ const int mqtt_port = 1883;
 const char* mqtt_user = "YOUR_MQTT_USERNAME";
 const char* mqtt_pass = "YOUR_MQTT_PASSWORD";
 ```
+
 ---
 
 ## 💾 MQTT history and microSD logging
 
-The firmware publishes retained readings to MQTT and announces four sensors through
+The ESP32 firmware publishes retained readings to MQTT and announces four sensors through
 Home Assistant MQTT Discovery. Home Assistant must have its MQTT and Recorder
 integrations enabled to retain history and generate graphs.
 

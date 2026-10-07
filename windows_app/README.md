@@ -7,7 +7,8 @@ No requiere ESP32, Wi-Fi ni MQTT.
 
 ## Dashboard de widgets
 
-La interfaz principal muestra paneles independientes para cada medida:
+La interfaz principal muestra una tarjeta independiente por cada conexión. Cada
+tarjeta presenta simultáneamente:
 
 | Widget | Dato |
 | --- | --- |
@@ -17,18 +18,19 @@ La interfaz principal muestra paneles independientes para cada medida:
 | Energía | kWh |
 | Frecuencia | Hz |
 | Factor de potencia | |
-| Potencia reciente | Gráfica de potencia en el tiempo |
+| Potencia reciente | Gráfica de potencia en el tiempo para el puerto seleccionado |
 
-Cada widget incluye su propio *sparkline* (mini gráfica) con las últimas
-lecturas. El panel de **Potencia reciente** muestra la gráfica completa del
-puerto seleccionado.
+Las tarjetas de todos los puertos permanecen visibles y cuentan con desplazamiento
+cuando ya no caben en la pantalla. La selección de la barra lateral solamente
+cambia la gráfica de **Potencia reciente**; no oculta las métricas de las demás
+conexiones.
 
 ## Monitorear varios puertos
 
 Pulsa **+ AGREGAR PUERTO**, elige el COM y asigna una etiqueta descriptiva, por
 ejemplo `Tablero norte`. Cada puerto tiene su propio hilo de lectura, reintentos,
-alertas de comunicación y gráfica. Selecciona un puerto en la barra lateral para
-ver sus widgets; puedes detener sólo el puerto seleccionado sin afectar los demás.
+alertas de comunicación y tarjeta de métricas. Selecciona un puerto en la barra
+lateral para ver su gráfica o detenerlo sin afectar los demás.
 
 No se permite abrir dos veces el mismo COM ni repetir una etiqueta mientras esa
 escucha esté configurada.

@@ -2,7 +2,24 @@ import struct
 import tempfile
 import unittest
 import csv
+import sys
+import types
 from pathlib import Path
+
+try:
+    import serial  # noqa: F401
+except ModuleNotFoundError:
+    serial_module = types.ModuleType("serial")
+    tools_module = types.ModuleType("serial.tools")
+    list_ports_module = types.ModuleType("serial.tools.list_ports")
+    list_ports_module.comports = lambda: []
+    tools_module.list_ports = list_ports_module
+    serial_module.tools = tools_module
+    sys.modules.update({
+        "serial": serial_module,
+        "serial.tools": tools_module,
+        "serial.tools.list_ports": list_ports_module,
+    })
 
 from pzem_monitor import ReadingStore, build_request, modbus_crc, parse_response
 

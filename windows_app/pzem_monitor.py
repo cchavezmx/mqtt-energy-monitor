@@ -419,6 +419,59 @@ class GraphCard(tk.Frame):
                                 fill=COLORS["foreground"])
 
 
+class ConnectionWidget(tk.Frame):
+    FIELDS = (
+        ("voltage", "Voltaje", "V", 2),
+        ("current", "Corriente", "A", 3),
+        ("power", "Potencia", "W", 2),
+        ("energy", "Energia", "kWh", 4),
+        ("frequency", "Frecuencia", "Hz", 2),
+        ("power_factor", "Factor potencia", "", 2),
+    )
+
+    def __init__(self, parent, tag, port, **kwargs):
+        super().__init__(parent, bg=COLORS["card"], highlightbackground=COLORS["panel"],
+                         highlightthickness=1, **kwargs)
+        header = tk.Frame(self, bg=COLORS["card"])
+        header.pack(fill="x", padx=12, pady=(9, 5))
+        tk.Label(header, text=tag, bg=COLORS["card"], fg=COLORS["foreground"],
+                 font=("Segoe UI", 11, "bold")).pack(side="left")
+        tk.Label(header, text=port, bg=COLORS["card"], fg=COLORS["muted"],
+                 font=("Segoe UI", 9)).pack(side="left", padx=(8, 0))
+        self.state_label = tk.Label(header, text="CONECTANDO", bg=COLORS["card"],
+                                    fg=COLORS["muted"], font=("Segoe UI", 8, "bold"))
+        self.state_label.pack(side="right")
+
+        metrics = tk.Frame(self, bg=COLORS["card"])
+        metrics.pack(fill="both", expand=True, padx=8, pady=(0, 9))
+        for column in range(3):
+            metrics.columnconfigure(column, weight=1)
+        self.value_labels = {}
+        for index, (key, title, unit, _decimals) in enumerate(self.FIELDS):
+            tile = tk.Frame(metrics, bg=COLORS["field"])
+            tile.grid(row=index // 3, column=index % 3, sticky="nsew", padx=3, pady=3)
+            tk.Label(tile, text=title.upper(), bg=COLORS["field"], fg=COLORS["muted"],
+                     font=("Segoe UI", 7, "bold")).pack(anchor="w", padx=8, pady=(6, 0))
+            label = tk.Label(tile, text=f"-- {unit}", bg=COLORS["field"],
+                             fg=COLORS.get(key, COLORS["foreground"]),
+                             font=("Segoe UI", 14, "bold"))
+            label.pack(anchor="w", padx=8, pady=(1, 6))
+            self.value_labels[key] = label
+
+    def show_reading(self, reading):
+        for key, _title, unit, decimals in self.FIELDS:
+            self.value_labels[key].configure(text=f"{reading[key]:.{decimals}f} {unit}")
+        self.state_label.configure(text="MONITOREANDO", fg=COLORS["accent"])
+
+    def show_state(self, state):
+        color = COLORS["warning"] if state == "SIN RESPUESTA" else COLORS["muted"]
+        self.state_label.configure(text=state.upper(), fg=color)
+        if state in ("SIN RESPUESTA", "Conectando"):
+            for key, _title, unit, _decimals in self.FIELDS:
+                text = f"SIN RESP. {unit}" if state == "SIN RESPUESTA" else f"-- {unit}"
+                self.value_labels[key].configure(text=text)
+
+
 class PortList(tk.Frame):
     def __init__(self, parent, on_select, **kwargs):
         super().__init__(parent, bg=COLORS["panel"], **kwargs)
@@ -485,7 +538,7 @@ class MonitorApp(tk.Tk):
         self.monitors = {}
         self.next_monitor_id = 1
         self.selected_monitor_id = None
-        self.cards = {}
+        self.connection_widgets = {}
         self._build_ui()
         self.after(100, self.process_messages)
         self.protocol("WM_DELETE_WINDOW", self.close)
@@ -506,8 +559,9 @@ class MonitorApp(tk.Tk):
         self.top_bar.pack(fill="x")
         self.top_bar.pack_propagate(False)
         self.alert = tk.StringVar(value="Agrega un puerto para comenzar")
-        tk.Label(self.top_bar, textvariable=self.alert, bg=COLORS["panel"],
-                 fg=COLORS["accent"], font=("Segoe UI", 11, "bold")).pack(side="left", padx=16)
+        self.alert_label = tk.Label(self.top_bar, textvariable=self.alert, bg=COLORS["panel"],
+                                    fg=COLORS["accent"], font=("Segoe UI", 11, "bold"))
+        self.alert_label.pack(side="left", padx=16)
         tk.Label(self.top_bar, text="Made by INTECSA", bg=COLORS["panel"],
                  fg=COLORS["muted"], font=("Segoe UI", 9, "bold")).pack(side="right", padx=16)
 
@@ -529,29 +583,35 @@ class MonitorApp(tk.Tk):
         tk.Button(button_box, text="HISTORIAL", bg="#374151", fg=COLORS["foreground"],
                   activebackground="#4b5563", bd=0, font=("Segoe UI", 9, "bold"),
                   command=self.show_history).pack(fill="x", pady=(0, 6), ipady=6)
-        tk.Button(button_box, text="EXPORTAR CSV", bg="#374151", fg=COLORS["foreground"],
-                  activebackground="#4b5563", bd=0, font=("Segoe UI", 9, "bold"),
-                  command=self.export_csv).pack(fill="x", ipady=6)
-
         self.main_area = tk.Frame(self, bg=COLORS["background"])
         self.main_area.pack(side="left", fill="both", expand=True, padx=16, pady=16)
 
-        metrics_grid = tk.Frame(self.main_area, bg=COLORS["background"])
-        metrics_grid.pack(fill="x")
-        metrics_grid.columnconfigure((0, 1, 2), weight=1)
-
-        specs = [
-            ("voltage", "Voltaje", "V", "voltage"),
-            ("current", "Corriente", "A", "current"),
-            ("power", "Potencia", "W", "power"),
-            ("energy", "Energia", "kWh", "energy"),
-            ("frequency", "Frecuencia", "Hz", "frequency"),
-            ("power_factor", "Factor de potencia", "", "power_factor"),
-        ]
-        for index, (key, title, unit, color) in enumerate(specs):
-            card = MetricCard(metrics_grid, title, unit, color)
-            card.grid(row=index // 3, column=index % 3, sticky="nsew", padx=6, pady=6)
-            self.cards[key] = card
+        tk.Label(self.main_area, text="METRICAS POR CONEXION", bg=COLORS["background"],
+                 fg=COLORS["muted"], font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        metrics_box = tk.Frame(self.main_area, bg=COLORS["background"])
+        metrics_box.pack(fill="x", pady=(6, 0))
+        self.metrics_canvas = tk.Canvas(metrics_box, bg=COLORS["background"], height=250,
+                                        highlightthickness=0)
+        metrics_scroll = ttk.Scrollbar(metrics_box, orient="vertical",
+                                       command=self.metrics_canvas.yview)
+        self.metrics_canvas.configure(yscrollcommand=metrics_scroll.set)
+        metrics_scroll.pack(side="right", fill="y")
+        self.metrics_canvas.pack(side="left", fill="x", expand=True)
+        self.metrics_grid = tk.Frame(self.metrics_canvas, bg=COLORS["background"])
+        self.metrics_window = self.metrics_canvas.create_window(
+            (0, 0), window=self.metrics_grid, anchor="nw"
+        )
+        self.metrics_grid.bind(
+            "<Configure>",
+            lambda _event: self.metrics_canvas.configure(
+                scrollregion=self.metrics_canvas.bbox("all")
+            ),
+        )
+        self.metrics_canvas.bind(
+            "<Configure>",
+            lambda event: self.metrics_canvas.itemconfigure(self.metrics_window, width=event.width),
+        )
+        self.metrics_grid.columnconfigure((0, 1), weight=1)
 
         self.graph_card = GraphCard(self.main_area)
         self.graph_card.pack(fill="both", expand=True, pady=(10, 0))
@@ -650,6 +710,11 @@ class MonitorApp(tk.Tk):
                                      "stop_event": stop_event, "retry": retry_interval,
                                      "outage": False, "session_id": session_id,
                                      "last_reading": None, "state": "Conectando"}
+        widget_index = len(self.connection_widgets)
+        connection_widget = ConnectionWidget(self.metrics_grid, source_tag, port)
+        connection_widget.grid(row=widget_index // 2, column=widget_index % 2,
+                               sticky="nsew", padx=5, pady=5)
+        self.connection_widgets[monitor_id] = connection_widget
         if self.selected_monitor_id is None:
             self.selected_monitor_id = monitor_id
         self.port_list.update_ports(self.monitors, self.selected_monitor_id)
@@ -678,6 +743,7 @@ class MonitorApp(tk.Tk):
         monitor["stop_event"].set()
         self.store.close_session(monitor["session_id"])
         monitor["state"] = "Detenido"
+        self.connection_widgets[monitor_id].show_state("Detenido")
         self.port_list.update_ports(self.monitors, self.selected_monitor_id)
         self.alert.set(f"{monitor['tag']}: monitoreo detenido")
         self.alert_label.configure(fg=COLORS["muted"])
@@ -695,30 +761,18 @@ class MonitorApp(tk.Tk):
     def show_selected_values(self):
         monitor = self.monitors.get(self.selected_monitor_id)
         if monitor is None:
-            for card in self.cards.values():
-                card.set_na()
             self.graph_card.set_data([])
             return
         reading = monitor.get("last_reading")
         if reading is not None and monitor["state"] == "Monitoreando":
-            decimals = {
-                "voltage": 2, "current": 3, "power": 2,
-                "energy": 4, "frequency": 2, "power_factor": 2,
-            }
-            for key, card in self.cards.items():
-                card.update_value(reading[key], decimals[key])
             tag = monitor["tag"]
             self.status.set(f"{tag} | Ultima lectura: {reading['timestamp']}")
             rows = self.store.recent(tag, session_id=monitor["session_id"])
             self.graph_card.set_data(rows)
         elif monitor["state"] == "SIN RESPUESTA":
-            for card in self.cards.values():
-                card.set_na()
             self.status.set(f"{monitor['tag']} | Sin respuesta; reintentando")
             self.graph_card.set_data([])
         else:
-            for card in self.cards.values():
-                card.set_na()
             self.status.set(f"{monitor['tag']} ({monitor['port']}) | {monitor['state']}")
             self.graph_card.set_data([])
 
@@ -811,6 +865,7 @@ class MonitorApp(tk.Tk):
                     monitor["outage"] = False
                     monitor["last_reading"] = payload
                     monitor["state"] = "Monitoreando"
+                    self.connection_widgets[monitor_id].show_reading(payload)
                     self.port_list.update_ports(self.monitors, self.selected_monitor_id)
                     if monitor_id == self.selected_monitor_id:
                         self.show_selected_values()
@@ -821,6 +876,7 @@ class MonitorApp(tk.Tk):
                     LOGGER.warning("SIN_RESPUESTA | %s | %s | %s", payload["source_tag"],
                                    payload["port"], payload["detail"])
                     monitor["state"] = "SIN RESPUESTA"
+                    self.connection_widgets[monitor_id].show_state("SIN RESPUESTA")
                     self.port_list.update_ports(self.monitors, self.selected_monitor_id)
                     if monitor_id == self.selected_monitor_id:
                         self.show_selected_values()
@@ -833,6 +889,8 @@ class MonitorApp(tk.Tk):
                     self.store.add_event(payload)
                     monitor["outage"] = False
                     monitor["state"] = "Monitoreando"
+                    if monitor["last_reading"] is not None:
+                        self.connection_widgets[monitor_id].show_reading(monitor["last_reading"])
                     LOGGER.info("RECUPERADO | %s | %s | %s", payload["source_tag"],
                                 payload["port"], payload["detail"])
                     self.alert.set(f"{monitor['tag']}: conexion recuperada")

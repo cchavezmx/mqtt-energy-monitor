@@ -18,12 +18,14 @@ tarjeta presenta simultáneamente:
 | Energía | kWh |
 | Frecuencia | Hz |
 | Factor de potencia | |
-| Potencia reciente | Gráfica de potencia en el tiempo para el puerto seleccionado |
+| Voltaje reciente | Gráfica de voltaje independiente para cada conexión |
 
 Las tarjetas de todos los puertos permanecen visibles y cuentan con desplazamiento
-cuando ya no caben en la pantalla. La selección de la barra lateral solamente
-cambia la gráfica de **Potencia reciente**; no oculta las métricas de las demás
-conexiones.
+cuando ya no caben en la pantalla. Cada tarjeta incluye su propia gráfica de
+**Voltaje reciente**, por lo que las gráficas de todos los puertos se observan al
+mismo tiempo. Las conexiones alternan colores de gráfica —amarillo y rojo— para
+distinguirlas rápidamente. La selección de la barra lateral sólo se usa para
+detener un puerto o identificar su estado; no oculta las demás conexiones.
 
 ## Monitorear varios puertos
 

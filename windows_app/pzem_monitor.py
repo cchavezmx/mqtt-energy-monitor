@@ -253,6 +253,13 @@ class ReadingStore:
             " ORDER BY rowid DESC LIMIT ?", parameters
         ).fetchall()[::-1]
 
+    def recent_voltage(self, session_id, limit=120):
+        return self.connection.execute(
+            """SELECT timestamp, voltage FROM readings
+            WHERE status = 'OK' AND voltage IS NOT NULL AND session_id = ?
+            ORDER BY rowid DESC LIMIT ?""", (session_id, limit)
+        ).fetchall()[::-1]
+
     def export_csv(self, destination: str):
         rows = self.connection.execute(
             """SELECT timestamp, source_tag, port, voltage, current, power, energy,
@@ -332,93 +339,6 @@ class PzemWorker(threading.Thread):
                 self.stop_event.wait(self.retry_interval)
 
 
-class MetricCard(tk.Frame):
-    def __init__(self, parent, title, unit, color_key, **kwargs):
-        super().__init__(parent, bg=COLORS["card"], highlightbackground=COLORS["panel"],
-                         highlightthickness=1, **kwargs)
-        self.unit = unit
-        self.color = COLORS.get(color_key, COLORS["accent"])
-
-        self.header = tk.Label(self, text=title.upper(), bg=COLORS["card"],
-                             fg=COLORS["muted"], font=("Segoe UI", 9, "bold"))
-        self.header.pack(anchor="w", padx=12, pady=(10, 0))
-
-        self.value_label = tk.Label(self, text=f"-- {unit}", bg=COLORS["card"],
-                                    fg=self.color, font=("Segoe UI", 28, "bold"))
-        self.value_label.pack(anchor="w", padx=12, pady=(4, 0))
-
-        self.spark = tk.Canvas(self, bg=COLORS["card"], height=50,
-                               highlightthickness=0)
-        self.spark.pack(fill="x", padx=10, pady=(8, 10))
-        self.spark_data = []
-
-    def update_value(self, value, decimals=2):
-        self.spark_data.append(value)
-        if len(self.spark_data) > 30:
-            self.spark_data.pop(0)
-        self.value_label.config(text=f"{value:.{decimals}f} {self.unit}")
-        self._draw_spark()
-
-    def set_na(self):
-        self.value_label.config(text=f"-- {self.unit}")
-
-    def _draw_spark(self):
-        self.spark.delete("all")
-        width = self.spark.winfo_width()
-        height = self.spark.winfo_height()
-        if len(self.spark_data) < 2 or width < 20 or height < 10:
-            return
-        data = self.spark_data[:]
-        maximum = max(max(data), 1)
-        points = []
-        for index, value in enumerate(data):
-            x = 2 + index * (width - 4) / (len(data) - 1)
-            y = height - 4 - value * (height - 8) / maximum
-            points.extend((x, y))
-        self.spark.create_line(*points, fill=self.color, width=2, smooth=True)
-
-
-class GraphCard(tk.Frame):
-    def __init__(self, parent, **kwargs):
-        super().__init__(parent, bg=COLORS["card"], highlightbackground=COLORS["panel"],
-                         highlightthickness=1, **kwargs)
-        header = tk.Label(self, text="POTENCIA RECIENTE", bg=COLORS["card"],
-                          fg=COLORS["muted"], font=("Segoe UI", 9, "bold"))
-        header.pack(anchor="w", padx=12, pady=(10, 0))
-        self.canvas = tk.Canvas(self, bg=COLORS["field"], height=160,
-                                highlightthickness=0)
-        self.canvas.pack(fill="both", expand=True, padx=10, pady=(8, 10))
-        self.canvas.bind("<Configure>", lambda _event: self.draw_graph())
-        self.rows = []
-
-    def set_data(self, rows):
-        self.rows = rows
-        self.draw_graph()
-
-    def draw_graph(self):
-        self.canvas.delete("all")
-        width = self.canvas.winfo_width()
-        height = self.canvas.winfo_height()
-        margin = 35
-        if len(self.rows) < 2 or width <= 2 * margin or height <= 2 * margin:
-            self.canvas.create_text(width / 2, height / 2, text="Esperando lecturas...",
-                                    fill=COLORS["muted"])
-            return
-        powers = [row[1] for row in self.rows]
-        maximum = max(max(powers), 1)
-        points = []
-        for index, power in enumerate(powers):
-            x = margin + index * (width - 2 * margin) / (len(powers) - 1)
-            y = height - margin - power * (height - 2 * margin) / maximum
-            points.extend((x, y))
-        self.canvas.create_line(margin, margin, margin, height - margin, fill=COLORS["grid"])
-        self.canvas.create_line(margin, height - margin, width - margin, height - margin,
-                                fill=COLORS["grid"])
-        self.canvas.create_line(*points, fill=COLORS["graph"], width=2)
-        self.canvas.create_text(margin, margin - 8, text=f"{maximum:.1f} W", anchor="w",
-                                fill=COLORS["foreground"])
-
-
 class ConnectionWidget(tk.Frame):
     FIELDS = (
         ("voltage", "Voltaje", "V", 2),
@@ -429,9 +349,10 @@ class ConnectionWidget(tk.Frame):
         ("power_factor", "Factor potencia", "", 2),
     )
 
-    def __init__(self, parent, tag, port, **kwargs):
+    def __init__(self, parent, tag, port, graph_color, **kwargs):
         super().__init__(parent, bg=COLORS["card"], highlightbackground=COLORS["panel"],
                          highlightthickness=1, **kwargs)
+        self.graph_color = graph_color
         header = tk.Frame(self, bg=COLORS["card"])
         header.pack(fill="x", padx=12, pady=(9, 5))
         tk.Label(header, text=tag, bg=COLORS["card"], fg=COLORS["foreground"],
@@ -458,18 +379,65 @@ class ConnectionWidget(tk.Frame):
             label.pack(anchor="w", padx=8, pady=(1, 6))
             self.value_labels[key] = label
 
+        graph_header = tk.Frame(self, bg=COLORS["card"])
+        graph_header.pack(fill="x", padx=12, pady=(0, 2))
+        tk.Label(graph_header, text="VOLTAJE RECIENTE", bg=COLORS["card"],
+                 fg=COLORS["muted"], font=("Segoe UI", 8, "bold")).pack(side="left")
+        self.voltage_range = tk.Label(graph_header, text="-- V", bg=COLORS["card"],
+                                      fg=self.graph_color, font=("Segoe UI", 8, "bold"))
+        self.voltage_range.pack(side="right")
+        self.voltage_graph = tk.Canvas(self, bg=COLORS["field"], height=95,
+                                       highlightthickness=0)
+        self.voltage_graph.pack(fill="x", padx=11, pady=(2, 10))
+        self.voltage_graph.bind("<Configure>", lambda _event: self._draw_voltage())
+        self.voltage_data = []
+
     def show_reading(self, reading):
         for key, _title, unit, decimals in self.FIELDS:
             self.value_labels[key].configure(text=f"{reading[key]:.{decimals}f} {unit}")
         self.state_label.configure(text="MONITOREANDO", fg=COLORS["accent"])
+        self.voltage_data.append(reading["voltage"])
+        if len(self.voltage_data) > 120:
+            self.voltage_data.pop(0)
+        self._draw_voltage()
+
+    def set_voltage_history(self, rows):
+        self.voltage_data = [row[1] for row in rows]
+        self._draw_voltage()
 
     def show_state(self, state):
-        color = COLORS["warning"] if state == "SIN RESPUESTA" else COLORS["muted"]
+        color = (COLORS["warning"] if state == "SIN RESPUESTA" else
+                 COLORS["accent"] if state == "Monitoreando" else COLORS["muted"])
         self.state_label.configure(text=state.upper(), fg=color)
         if state in ("SIN RESPUESTA", "Conectando"):
             for key, _title, unit, _decimals in self.FIELDS:
                 text = f"SIN RESP. {unit}" if state == "SIN RESPUESTA" else f"-- {unit}"
                 self.value_labels[key].configure(text=text)
+
+    def _draw_voltage(self):
+        canvas = self.voltage_graph
+        canvas.delete("all")
+        width, height = canvas.winfo_width(), canvas.winfo_height()
+        margin_x, margin_y = 8, 10
+        if len(self.voltage_data) < 2 or width < 30:
+            canvas.create_text(width / 2, height / 2, text="Esperando lecturas...",
+                               fill=COLORS["muted"])
+            self.voltage_range.configure(text="-- V")
+            return
+        minimum = min(self.voltage_data)
+        maximum = max(self.voltage_data)
+        span = maximum - minimum
+        padding = max(span * 0.15, 1.0)
+        low, high = minimum - padding, maximum + padding
+        points = []
+        for index, voltage in enumerate(self.voltage_data):
+            x = margin_x + index * (width - 2 * margin_x) / (len(self.voltage_data) - 1)
+            y = height - margin_y - (voltage - low) * (height - 2 * margin_y) / (high - low)
+            points.extend((x, y))
+        canvas.create_line(margin_x, height - margin_y, width - margin_x,
+                           height - margin_y, fill=COLORS["grid"])
+        canvas.create_line(*points, fill=self.graph_color, width=2, smooth=True)
+        self.voltage_range.configure(text=f"{minimum:.1f}–{maximum:.1f} V")
 
 
 class PortList(tk.Frame):
@@ -589,14 +557,14 @@ class MonitorApp(tk.Tk):
         tk.Label(self.main_area, text="METRICAS POR CONEXION", bg=COLORS["background"],
                  fg=COLORS["muted"], font=("Segoe UI", 9, "bold")).pack(anchor="w")
         metrics_box = tk.Frame(self.main_area, bg=COLORS["background"])
-        metrics_box.pack(fill="x", pady=(6, 0))
-        self.metrics_canvas = tk.Canvas(metrics_box, bg=COLORS["background"], height=250,
+        metrics_box.pack(fill="both", expand=True, pady=(6, 0))
+        self.metrics_canvas = tk.Canvas(metrics_box, bg=COLORS["background"],
                                         highlightthickness=0)
         metrics_scroll = ttk.Scrollbar(metrics_box, orient="vertical",
                                        command=self.metrics_canvas.yview)
         self.metrics_canvas.configure(yscrollcommand=metrics_scroll.set)
         metrics_scroll.pack(side="right", fill="y")
-        self.metrics_canvas.pack(side="left", fill="x", expand=True)
+        self.metrics_canvas.pack(side="left", fill="both", expand=True)
         self.metrics_grid = tk.Frame(self.metrics_canvas, bg=COLORS["background"])
         self.metrics_window = self.metrics_canvas.create_window(
             (0, 0), window=self.metrics_grid, anchor="nw"
@@ -612,9 +580,6 @@ class MonitorApp(tk.Tk):
             lambda event: self.metrics_canvas.itemconfigure(self.metrics_window, width=event.width),
         )
         self.metrics_grid.columnconfigure((0, 1), weight=1)
-
-        self.graph_card = GraphCard(self.main_area)
-        self.graph_card.pack(fill="both", expand=True, pady=(10, 0))
 
         self.status = tk.StringVar(value=f"Datos locales: {DB_PATH} | CSV: {CSV_DIR}")
         tk.Label(self.main_area, textvariable=self.status, bg=COLORS["background"],
@@ -711,9 +676,14 @@ class MonitorApp(tk.Tk):
                                      "outage": False, "session_id": session_id,
                                      "last_reading": None, "state": "Conectando"}
         widget_index = len(self.connection_widgets)
-        connection_widget = ConnectionWidget(self.metrics_grid, source_tag, port)
+        graph_colors = (COLORS["voltage"], COLORS["current"])
+        connection_widget = ConnectionWidget(
+            self.metrics_grid, source_tag, port,
+            graph_color=graph_colors[widget_index % len(graph_colors)],
+        )
         connection_widget.grid(row=widget_index // 2, column=widget_index % 2,
                                sticky="nsew", padx=5, pady=5)
+        connection_widget.set_voltage_history(self.store.recent_voltage(session_id))
         self.connection_widgets[monitor_id] = connection_widget
         if self.selected_monitor_id is None:
             self.selected_monitor_id = monitor_id
@@ -761,20 +731,15 @@ class MonitorApp(tk.Tk):
     def show_selected_values(self):
         monitor = self.monitors.get(self.selected_monitor_id)
         if monitor is None:
-            self.graph_card.set_data([])
             return
         reading = monitor.get("last_reading")
         if reading is not None and monitor["state"] == "Monitoreando":
             tag = monitor["tag"]
             self.status.set(f"{tag} | Ultima lectura: {reading['timestamp']}")
-            rows = self.store.recent(tag, session_id=monitor["session_id"])
-            self.graph_card.set_data(rows)
         elif monitor["state"] == "SIN RESPUESTA":
             self.status.set(f"{monitor['tag']} | Sin respuesta; reintentando")
-            self.graph_card.set_data([])
         else:
             self.status.set(f"{monitor['tag']} ({monitor['port']}) | {monitor['state']}")
-            self.graph_card.set_data([])
 
     def show_history(self):
         dialog = tk.Toplevel(self)
@@ -889,8 +854,7 @@ class MonitorApp(tk.Tk):
                     self.store.add_event(payload)
                     monitor["outage"] = False
                     monitor["state"] = "Monitoreando"
-                    if monitor["last_reading"] is not None:
-                        self.connection_widgets[monitor_id].show_reading(monitor["last_reading"])
+                    self.connection_widgets[monitor_id].show_state("Monitoreando")
                     LOGGER.info("RECUPERADO | %s | %s | %s", payload["source_tag"],
                                 payload["port"], payload["detail"])
                     self.alert.set(f"{monitor['tag']}: conexion recuperada")

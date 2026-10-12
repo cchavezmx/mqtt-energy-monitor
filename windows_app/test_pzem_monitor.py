@@ -113,6 +113,21 @@ class PzemProtocolTests(unittest.TestCase):
             store.delete_session(session_id)
             self.assertEqual(store.session_history(), [])
 
+    def test_recent_voltage_is_filtered_by_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ReadingStore(Path(directory) / "lecturas.db")
+            session_id = store.create_session("Principal", "COM9")
+            other_session = store.create_session("Secundario", "COM10")
+            for current_session, voltage in ((session_id, 127.2), (other_session, 220.1)):
+                store.add({
+                    "timestamp": "2026-10-12 16:00:00", "source_tag": "Puerto",
+                    "port": "COM9", "session_id": current_session, "voltage": voltage,
+                    "current": 0.1, "power": 5.0, "energy": 0.1,
+                    "frequency": 60.0, "power_factor": 1.0,
+                })
+            self.assertEqual(store.recent_voltage(session_id),
+                             [("2026-10-12 16:00:00", 127.2)])
+
 
 if __name__ == "__main__":
     unittest.main()

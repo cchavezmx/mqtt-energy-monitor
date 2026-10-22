@@ -117,6 +117,17 @@ sudo apt install python3 python3-venv python3-tk
 sudo usermod -aG dialout "$USER"
 ```
 
+Se requiere Python 3.8 o posterior. Comprueba la versión antes de compilar:
+
+```bash
+python3 --version
+```
+
+Si muestra Python 3.5, actualiza a una imagen reciente de Raspberry Pi OS con
+escritorio. Esa versión de Python no puede ejecutar la aplicación ni instalar la
+versión requerida de PyInstaller. El script se detendrá con una explicación en
+lugar de intentar una instalación incompatible.
+
 Cierra la sesión y vuelve a entrar después de agregar el usuario a `dialout`.
 Para ejecutarla directamente desde el código:
 

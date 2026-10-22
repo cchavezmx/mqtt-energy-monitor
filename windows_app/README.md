@@ -117,16 +117,24 @@ sudo apt install python3 python3-venv python3-tk
 sudo usermod -aG dialout "$USER"
 ```
 
-Se requiere Python 3.8 o posterior. Comprueba la versión antes de compilar:
+Para generar el ejecutable con PyInstaller se requiere Python 3.8 o posterior.
+Comprueba la versión antes de compilar:
 
 ```bash
 python3 --version
 ```
 
-Si muestra Python 3.5, actualiza a una imagen reciente de Raspberry Pi OS con
-escritorio. Esa versión de Python no puede ejecutar la aplicación ni instalar la
-versión requerida de PyInstaller. El script se detendrá con una explicación en
-lugar de intentar una instalación incompatible.
+Si muestra Python 3.5, `build_linux.sh` no podrá generar el ejecutable. Sin embargo,
+la aplicación puede ejecutarse directamente en Raspberry Pi OS Stretch instalando
+PySerial desde `apt`:
+
+```bash
+sudo apt install python3-serial python3-tk
+cd windows_app
+python3 pzem_monitor.py
+```
+
+Este modo antiguo no requiere `pip`, `venv` ni PyInstaller.
 
 Cierra la sesión y vuelve a entrar después de agregar el usuario a `dialout`.
 Para ejecutarla directamente desde el código:

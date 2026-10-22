@@ -105,6 +105,41 @@ PowerShell -ExecutionPolicy Bypass -File .\build.ps1
 El resultado queda en `dist\PZEM-Monitor.exe`. El ejecutable puede copiarse a otra
 computadora Windows sin instalar Python.
 
+## Raspberry Pi OS / Linux
+
+La aplicación funciona en Raspberry Pi con escritorio gráfico. Los puertos se
+mostrarán normalmente como `/dev/ttyUSB0` o `/dev/ttyACM0`. Instala primero las
+dependencias del sistema:
+
+```bash
+sudo apt update
+sudo apt install python3 python3-venv python3-tk
+sudo usermod -aG dialout "$USER"
+```
+
+Cierra la sesión y vuelve a entrar después de agregar el usuario a `dialout`.
+Para ejecutarla directamente desde el código:
+
+```bash
+cd windows_app
+python3 -m venv .venv-linux
+.venv-linux/bin/pip install -r requirements.txt
+.venv-linux/bin/python pzem_monitor.py
+```
+
+Para generar un único ejecutable ARM en la propia Raspberry:
+
+```bash
+cd windows_app
+./build_linux.sh
+./dist/PZEM-Monitor
+```
+
+El resultado queda en `windows_app/dist/PZEM-Monitor`. No se puede reutilizar el
+EXE de Windows ni compilar en una PC x86 y copiarlo a ARM; genera el binario en la
+misma Raspberry, o en otro Linux con la misma arquitectura y versión compatible.
+Los datos seguirán guardándose en `~/PZEM Monitor/`.
+
 El adaptador debe usar lógica TTL de 3.3/5 V compatible con el PZEM. No conectes
 los pines seriales directamente a tensiones de red y desconecta la alimentación
 antes de modificar el cableado.

@@ -44,10 +44,14 @@ COLORS = {
 }
 
 
+def current_timestamp():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
 def configure_logging():
     APP_DIR.mkdir(parents=True, exist_ok=True)
     if not LOGGER.handlers:
-        handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
+        handler = logging.FileHandler(str(LOG_PATH), encoding="utf-8")
         handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
         LOGGER.addHandler(handler)
         LOGGER.setLevel(logging.INFO)
@@ -69,7 +73,7 @@ def build_request(address: int) -> bytes:
 
 def parse_response(data: bytes, address: int) -> dict:
     if len(data) != 25:
-        raise ValueError(f"Respuesta incompleta ({len(data)} de 25 bytes)")
+        raise ValueError("Respuesta incompleta ({} de 25 bytes)".format(len(data)))
     if data[0] != address or data[1] != 0x04 or data[2] != 20:
         raise ValueError("Respuesta Modbus no valida")
     if modbus_crc(data[:-2]) != struct.unpack("<H", data[-2:])[0]:
@@ -90,7 +94,7 @@ class ReadingStore:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.csv_dir = path.parent / "csv"
-        self.connection = sqlite3.connect(path)
+        self.connection = sqlite3.connect(str(path))
         self.connection.execute("PRAGMA synchronous=FULL")
         self.connection.execute(
             """CREATE TABLE IF NOT EXISTS readings (
@@ -138,14 +142,14 @@ class ReadingStore:
 
     def _csv_path(self, source_tag: str, session_id=None) -> Path:
         safe_tag = re.sub(r"[^A-Za-z0-9._-]+", "_", source_tag).strip("._") or "puerto"
-        suffix = f"_sesion_{session_id}" if session_id else ""
-        return self.csv_dir / f"lecturas_{safe_tag}{suffix}.csv"
+        suffix = "_sesion_{}".format(session_id) if session_id else ""
+        return self.csv_dir / "lecturas_{}{}.csv".format(safe_tag, suffix)
 
     def _append_csv(self, row: tuple, source_tag: str, session_id=None):
         path = self._csv_path(source_tag, session_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         needs_header = not path.exists() or path.stat().st_size == 0
-        with open(path, "a", newline="", encoding="utf-8-sig") as output:
+        with open(str(path), "a", newline="", encoding="utf-8-sig") as output:
             writer = csv.writer(output)
             if needs_header:
                 writer.writerow(("fecha", "etiqueta", "puerto", "voltaje_V", "corriente_A",
@@ -187,7 +191,7 @@ class ReadingStore:
                          event.get("source_tag", "Principal"), event.get("session_id"))
 
     def create_session(self, source_tag, port):
-        started_at = datetime.now().isoformat(sep=" ", timespec="seconds")
+        started_at = current_timestamp()
         cursor = self.connection.execute(
             "INSERT INTO sessions (source_tag, port, started_at) VALUES (?, ?, ?)",
             (source_tag, port, started_at),
@@ -205,7 +209,7 @@ class ReadingStore:
     def close_session(self, session_id):
         self.connection.execute(
             "UPDATE sessions SET ended_at = ? WHERE id = ?",
-            (datetime.now().isoformat(sep=" ", timespec="seconds"), session_id),
+            (current_timestamp(), session_id),
         )
         self.connection.commit()
 
@@ -301,9 +305,7 @@ class PzemWorker(threading.Thread):
                         connection.reset_input_buffer()
                         connection.write(build_request(self.address))
                         reading = parse_response(connection.read(25), self.address)
-                        reading["timestamp"] = datetime.now().isoformat(
-                            sep=" ", timespec="seconds"
-                        )
+                        reading["timestamp"] = current_timestamp()
                         reading.update(source_tag=self.source_tag, port=self.port,
                                        monitor_id=self.monitor_id, session_id=self.session_id)
                         if outage_started is not None:
@@ -311,7 +313,7 @@ class PzemWorker(threading.Thread):
                             self.messages.put(("recovered", {
                                 "timestamp": reading["timestamp"],
                                 "status": "RECUPERADO",
-                                "detail": f"Interrupcion de {duration} segundos",
+                                "detail": "Interrupcion de {} segundos".format(duration),
                                 "duration": duration,
                                 "source_tag": self.source_tag,
                                 "port": self.port,
@@ -327,7 +329,7 @@ class PzemWorker(threading.Thread):
                 if outage_started is None:
                     outage_started = time.monotonic()
                 event = {
-                    "timestamp": datetime.now().isoformat(sep=" ", timespec="seconds"),
+                    "timestamp": current_timestamp(),
                     "status": "SIN_RESPUESTA",
                     "detail": str(error),
                     "source_tag": self.source_tag,
@@ -373,7 +375,7 @@ class ConnectionWidget(tk.Frame):
             tile.grid(row=index // 3, column=index % 3, sticky="nsew", padx=3, pady=3)
             tk.Label(tile, text=title.upper(), bg=COLORS["field"], fg=COLORS["muted"],
                      font=("Segoe UI", 7, "bold")).pack(anchor="w", padx=8, pady=(6, 0))
-            label = tk.Label(tile, text=f"-- {unit}", bg=COLORS["field"],
+            label = tk.Label(tile, text="-- {}".format(unit), bg=COLORS["field"],
                              fg=COLORS.get(key, COLORS["foreground"]),
                              font=("Segoe UI", 14, "bold"))
             label.pack(anchor="w", padx=8, pady=(1, 6))
@@ -394,7 +396,8 @@ class ConnectionWidget(tk.Frame):
 
     def show_reading(self, reading):
         for key, _title, unit, decimals in self.FIELDS:
-            self.value_labels[key].configure(text=f"{reading[key]:.{decimals}f} {unit}")
+            value_text = ("{0:." + str(decimals) + "f} {1}").format(reading[key], unit)
+            self.value_labels[key].configure(text=value_text)
         self.state_label.configure(text="MONITOREANDO", fg=COLORS["accent"])
         self.voltage_data.append(reading["voltage"])
         if len(self.voltage_data) > 120:
@@ -411,7 +414,8 @@ class ConnectionWidget(tk.Frame):
         self.state_label.configure(text=state.upper(), fg=color)
         if state in ("SIN RESPUESTA", "Conectando"):
             for key, _title, unit, _decimals in self.FIELDS:
-                text = f"SIN RESP. {unit}" if state == "SIN RESPUESTA" else f"-- {unit}"
+                text = ("SIN RESP. {}".format(unit) if state == "SIN RESPUESTA"
+                        else "-- {}".format(unit))
                 self.value_labels[key].configure(text=text)
 
     def _draw_voltage(self):
@@ -437,7 +441,7 @@ class ConnectionWidget(tk.Frame):
         canvas.create_line(margin_x, height - margin_y, width - margin_x,
                            height - margin_y, fill=COLORS["grid"])
         canvas.create_line(*points, fill=self.graph_color, width=2, smooth=True)
-        self.voltage_range.configure(text=f"{minimum:.1f}–{maximum:.1f} V")
+        self.voltage_range.configure(text="{:.1f}–{:.1f} V".format(minimum, maximum))
 
 
 class PortList(tk.Frame):
@@ -461,7 +465,7 @@ class PortList(tk.Frame):
         items = []
         for monitor_id, monitor in monitors.items():
             status = monitor.get("state", "Conectando")
-            text = f"{monitor['tag']} [{monitor['port']}] - {status}"
+            text = "{} [{}] - {}".format(monitor["tag"], monitor["port"], status)
             items.append((monitor_id, text))
         items.sort(key=lambda item: item[1])
         current_texts = tuple(self.listbox.get(idx) for idx in range(self.listbox.size()))
@@ -581,7 +585,7 @@ class MonitorApp(tk.Tk):
         )
         self.metrics_grid.columnconfigure((0, 1), weight=1)
 
-        self.status = tk.StringVar(value=f"Datos locales: {DB_PATH} | CSV: {CSV_DIR}")
+        self.status = tk.StringVar(value="Datos locales: {} | CSV: {}".format(DB_PATH, CSV_DIR))
         tk.Label(self.main_area, textvariable=self.status, bg=COLORS["background"],
                  fg=COLORS["muted"], font=("Segoe UI", 9)).pack(anchor="w", pady=(10, 0))
 
@@ -641,7 +645,7 @@ class MonitorApp(tk.Tk):
             return False
         if any(item["worker"].is_alive() and item["port"].casefold() == port.casefold()
                for item in self.monitors.values()):
-            messagebox.showwarning("Puerto en uso", f"{port} ya se esta monitoreando.")
+            messagebox.showwarning("Puerto en uso", "{} ya se esta monitoreando.".format(port))
             return False
         if any(item["worker"].is_alive() and item["tag"].casefold() == source_tag.casefold()
                for item in self.monitors.values()):
@@ -651,7 +655,9 @@ class MonitorApp(tk.Tk):
         if previous:
             resume = messagebox.askyesnocancel(
                 "Historial encontrado",
-                f"Hay datos anteriores de {source_tag} ({port}), iniciados el {previous[1]}.\n\n"
+                "Hay datos anteriores de {} ({}), iniciados el {}.\n\n".format(
+                    source_tag, port, previous[1]
+                ) +
                 "Si: retomar esa sesion.\nNo: comenzar una sesion nueva.\n"
                 "Cancelar: no iniciar la escucha.",
             )
@@ -690,7 +696,7 @@ class MonitorApp(tk.Tk):
         self.port_list.update_ports(self.monitors, self.selected_monitor_id)
         self.show_selected_values()
         worker.start()
-        self.alert.set(f"{source_tag} ({port}): monitoreando")
+        self.alert.set("{} ({}): monitoreando".format(source_tag, port))
         LOGGER.info(
             "Monitoreo iniciado | %s | %s | medicion=%ss | reconexion=%ss",
             source_tag, port, interval, retry_interval
@@ -705,7 +711,7 @@ class MonitorApp(tk.Tk):
         monitor = self.monitors[monitor_id]
         if not messagebox.askyesno(
             "Detener monitoreo",
-            f"Se dejara de registrar {monitor['tag']} ({monitor['port']}).\n\n"
+            "Se dejara de registrar {} ({}).\n\n".format(monitor["tag"], monitor["port"]) +
             "Las lecturas, eventos y graficas ya guardados NO se perderan.\n\n"
             "¿Deseas continuar?",
         ):
@@ -715,7 +721,7 @@ class MonitorApp(tk.Tk):
         monitor["state"] = "Detenido"
         self.connection_widgets[monitor_id].show_state("Detenido")
         self.port_list.update_ports(self.monitors, self.selected_monitor_id)
-        self.alert.set(f"{monitor['tag']}: monitoreo detenido")
+        self.alert.set("{}: monitoreo detenido".format(monitor["tag"]))
         self.alert_label.configure(fg=COLORS["muted"])
         self.show_selected_values()
         LOGGER.info("Monitoreo detenido | %s | %s", monitor["tag"], monitor["port"])
@@ -735,11 +741,13 @@ class MonitorApp(tk.Tk):
         reading = monitor.get("last_reading")
         if reading is not None and monitor["state"] == "Monitoreando":
             tag = monitor["tag"]
-            self.status.set(f"{tag} | Ultima lectura: {reading['timestamp']}")
+            self.status.set("{} | Ultima lectura: {}".format(tag, reading["timestamp"]))
         elif monitor["state"] == "SIN RESPUESTA":
-            self.status.set(f"{monitor['tag']} | Sin respuesta; reintentando")
+            self.status.set("{} | Sin respuesta; reintentando".format(monitor["tag"]))
         else:
-            self.status.set(f"{monitor['tag']} ({monitor['port']}) | {monitor['state']}")
+            self.status.set("{} ({}) | {}".format(
+                monitor["tag"], monitor["port"], monitor["state"]
+            ))
 
     def show_history(self):
         dialog = tk.Toplevel(self)
@@ -781,7 +789,7 @@ class MonitorApp(tk.Tk):
                 return
             destination = filedialog.asksaveasfilename(
                 parent=dialog, defaultextension=".csv",
-                initialfile=f"sesion_{session_id}.csv", filetypes=(("CSV", "*.csv"),)
+                initialfile="sesion_{}.csv".format(session_id), filetypes=(("CSV", "*.csv"),)
             )
             if destination:
                 self.store.export_session_csv(session_id, destination)
@@ -834,7 +842,7 @@ class MonitorApp(tk.Tk):
                     self.port_list.update_ports(self.monitors, self.selected_monitor_id)
                     if monitor_id == self.selected_monitor_id:
                         self.show_selected_values()
-                    self.alert.set(f"{monitor['tag']}: conexion activa")
+                    self.alert.set("{}: conexion activa".format(monitor["tag"]))
                     self.alert_label.configure(fg=COLORS["accent"])
                 elif kind == "outage":
                     self.store.add_event(payload)
@@ -848,7 +856,7 @@ class MonitorApp(tk.Tk):
                     if not monitor["outage"]:
                         monitor["outage"] = True
                         self.bell()
-                    self.alert.set(f"⚠ {monitor['tag']} SIN RESPUESTA — reintentando")
+                    self.alert.set("⚠ {} SIN RESPUESTA — reintentando".format(monitor["tag"]))
                     self.alert_label.configure(fg=COLORS["warning"])
                 elif kind == "recovered":
                     self.store.add_event(payload)
@@ -857,16 +865,18 @@ class MonitorApp(tk.Tk):
                     self.connection_widgets[monitor_id].show_state("Monitoreando")
                     LOGGER.info("RECUPERADO | %s | %s | %s", payload["source_tag"],
                                 payload["port"], payload["detail"])
-                    self.alert.set(f"{monitor['tag']}: conexion recuperada")
+                    self.alert.set("{}: conexion recuperada".format(monitor["tag"]))
                     self.alert_label.configure(fg=COLORS["accent"])
                     if monitor_id == self.selected_monitor_id:
-                        self.status.set(f"Conexion recuperada; corte de {payload['duration']} segundos")
+                        self.status.set("Conexion recuperada; corte de {} segundos".format(
+                            payload["duration"]
+                        ))
         except queue.Empty:
             pass
         self.after(100, self.process_messages)
 
     def export_csv(self):
-        name = f"lecturas_{datetime.now():%Y%m%d_%H%M%S}.csv"
+        name = "lecturas_{}.csv".format(datetime.now().strftime("%Y%m%d_%H%M%S"))
         destination = filedialog.asksaveasfilename(defaultextension=".csv", initialfile=name,
                                                    filetypes=(("CSV", "*.csv"),))
         if destination:
@@ -877,7 +887,9 @@ class MonitorApp(tk.Tk):
         active = [item for item in self.monitors.values() if item["worker"].is_alive()]
         if active and not messagebox.askyesno(
             "Cerrar aplicacion",
-            f"Hay {len(active)} puerto(s) activo(s). Al cerrar se dejara de registrar.\n\n"
+            "Hay {} puerto(s) activo(s). Al cerrar se dejara de registrar.\n\n".format(
+                len(active)
+            ) +
             "Todo el historial ya guardado se conservara. ¿Deseas cerrar?",
         ):
             return

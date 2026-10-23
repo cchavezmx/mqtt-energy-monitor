@@ -1,4 +1,5 @@
 import csv
+import json
 import logging
 import os
 import queue
@@ -20,6 +21,7 @@ APP_DIR = Path.home() / "PZEM Monitor"
 DB_PATH = APP_DIR / "lecturas.db"
 LOG_PATH = APP_DIR / "pzem_monitor.log"
 CSV_DIR = APP_DIR / "csv"
+STATE_PATH = APP_DIR / "monitores.json"
 LOGGER = logging.getLogger("pzem_monitor")
 
 COLORS = {
@@ -46,6 +48,28 @@ COLORS = {
 
 def current_timestamp():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def load_monitor_state(path):
+    if not path.exists():
+        return []
+    try:
+        with open(str(path), "r", encoding="utf-8") as state_file:
+            data = json.load(state_file)
+        return data if isinstance(data, list) else []
+    except (OSError, ValueError):
+        LOGGER.exception("No se pudo cargar el estado de monitores")
+        return []
+
+
+def save_monitor_state(path, monitors):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(str(path) + ".tmp")
+    with open(str(temporary), "w", encoding="utf-8") as state_file:
+        json.dump(monitors, state_file, ensure_ascii=False, indent=2)
+        state_file.flush()
+        os.fsync(state_file.fileno())
+    os.replace(str(temporary), str(path))
 
 
 def configure_logging():
@@ -513,6 +537,7 @@ class MonitorApp(tk.Tk):
         self.connection_widgets = {}
         self._build_ui()
         self.after(100, self.process_messages)
+        self.after(250, self.restore_monitors)
         self.protocol("WM_DELETE_WINDOW", self.close)
         LOGGER.info("Aplicacion iniciada")
 
@@ -630,7 +655,7 @@ class MonitorApp(tk.Tk):
                       row=len(specs), column=0, columnspan=2, pady=(16, 0), ipady=6, sticky="ew")
         fields["tag"].focus_set()
 
-    def start_monitor(self, source_tag, port, address, interval, retry_interval):
+    def start_monitor(self, source_tag, port, address, interval, retry_interval, restoring=False):
         source_tag, port = source_tag.strip(), port.strip()
         try:
             address, interval, retry_interval = int(address), float(interval), float(retry_interval)
@@ -653,14 +678,17 @@ class MonitorApp(tk.Tk):
             return False
         previous = self.store.latest_session(source_tag, port)
         if previous:
-            resume = messagebox.askyesnocancel(
-                "Historial encontrado",
-                "Hay datos anteriores de {} ({}), iniciados el {}.\n\n".format(
-                    source_tag, port, previous[1]
-                ) +
-                "Si: retomar esa sesion.\nNo: comenzar una sesion nueva.\n"
-                "Cancelar: no iniciar la escucha.",
-            )
+            if restoring:
+                resume = True
+            else:
+                resume = messagebox.askyesnocancel(
+                    "Historial encontrado",
+                    "Hay datos anteriores de {} ({}), iniciados el {}.\n\n".format(
+                        source_tag, port, previous[1]
+                    ) +
+                    "Si: retomar esa sesion.\nNo: comenzar una sesion nueva.\n"
+                    "Cancelar: no iniciar la escucha.",
+                )
             if resume is None:
                 return False
             if resume:
@@ -679,6 +707,7 @@ class MonitorApp(tk.Tk):
         )
         self.monitors[monitor_id] = {"tag": source_tag, "port": port, "worker": worker,
                                      "stop_event": stop_event, "retry": retry_interval,
+                                     "address": address, "interval": interval,
                                      "outage": False, "session_id": session_id,
                                      "last_reading": None, "state": "Conectando"}
         widget_index = len(self.connection_widgets)
@@ -696,12 +725,48 @@ class MonitorApp(tk.Tk):
         self.port_list.update_ports(self.monitors, self.selected_monitor_id)
         self.show_selected_values()
         worker.start()
+        self.save_active_monitors()
         self.alert.set("{} ({}): monitoreando".format(source_tag, port))
         LOGGER.info(
             "Monitoreo iniciado | %s | %s | medicion=%ss | reconexion=%ss",
             source_tag, port, interval, retry_interval
         )
         return True
+
+    def save_active_monitors(self):
+        configurations = []
+        for monitor in self.monitors.values():
+            if monitor["stop_event"].is_set():
+                continue
+            configurations.append({
+                "tag": monitor["tag"],
+                "port": monitor["port"],
+                "address": monitor["address"],
+                "interval": monitor["interval"],
+                "retry_interval": monitor["retry"],
+            })
+        try:
+            save_monitor_state(STATE_PATH, configurations)
+        except OSError:
+            LOGGER.exception("No se pudo guardar el estado de monitores")
+
+    def restore_monitors(self):
+        configurations = load_monitor_state(STATE_PATH)
+        restored = 0
+        for config in configurations:
+            try:
+                started = self.start_monitor(
+                    config["tag"], config["port"], config.get("address", 1),
+                    config.get("interval", 3), config.get("retry_interval", 5),
+                    restoring=True,
+                )
+                if started:
+                    restored += 1
+            except (KeyError, TypeError, ValueError):
+                LOGGER.exception("Configuracion guardada invalida: %r", config)
+        if restored:
+            self.alert.set("Se restauraron {} conexion(es) automaticamente".format(restored))
+            LOGGER.info("Monitores restaurados automaticamente: %s", restored)
 
     def stop_selected(self):
         monitor_id = self.selected_monitor_id
@@ -717,6 +782,7 @@ class MonitorApp(tk.Tk):
         ):
             return
         monitor["stop_event"].set()
+        self.save_active_monitors()
         self.store.close_session(monitor["session_id"])
         monitor["state"] = "Detenido"
         self.connection_widgets[monitor_id].show_state("Detenido")
@@ -893,6 +959,7 @@ class MonitorApp(tk.Tk):
             "Todo el historial ya guardado se conservara. ¿Deseas cerrar?",
         ):
             return
+        self.save_active_monitors()
         for monitor in self.monitors.values():
             if monitor["worker"].is_alive():
                 monitor["stop_event"].set()

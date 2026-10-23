@@ -21,7 +21,10 @@ except ModuleNotFoundError:
         "serial.tools.list_ports": list_ports_module,
     })
 
-from pzem_monitor import ReadingStore, build_request, modbus_crc, parse_response
+from pzem_monitor import (
+    ReadingStore, build_request, load_monitor_state, modbus_crc, parse_response,
+    save_monitor_state,
+)
 
 
 class PzemProtocolTests(unittest.TestCase):
@@ -127,6 +130,22 @@ class PzemProtocolTests(unittest.TestCase):
                 })
             self.assertEqual(store.recent_voltage(session_id),
                              [("2026-10-12 16:00:00", 127.2)])
+
+    def test_monitor_state_is_persisted_and_restored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "monitores.json"
+            monitors = [{
+                "tag": "Tablero norte", "port": "/dev/ttyUSB0", "address": 1,
+                "interval": 3.0, "retry_interval": 5.0,
+            }]
+            save_monitor_state(path, monitors)
+            self.assertEqual(load_monitor_state(path), monitors)
+
+    def test_invalid_monitor_state_is_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "monitores.json"
+            path.write_text("not-json")
+            self.assertEqual(load_monitor_state(path), [])
 
 
 if __name__ == "__main__":

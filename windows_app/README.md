@@ -165,6 +165,25 @@ EXE de Windows ni compilar en una PC x86 y copiarlo a ARM; genera el binario en 
 misma Raspberry, o en otro Linux con la misma arquitectura y versión compatible.
 Los datos seguirán guardándose en `~/PZEM Monitor/`.
 
+### Inicio automático y recuperación del monitoreo
+
+Después de compilar, instala el inicio automático para el usuario actual:
+
+```bash
+cd windows_app
+./install_raspberry_autostart.sh
+```
+
+La Raspberry debe iniciar automáticamente una sesión gráfica. Al abrirse, la
+aplicación recupera los puertos que estaban monitoreándose, junto con su etiqueta,
+dirección e intervalos, y retoma sus sesiones sin preguntar. Si un adaptador aún
+no está disponible, conserva la configuración y reintenta la comunicación.
+
+El estado se guarda en `~/PZEM Monitor/monitores.json` cada vez que se agrega o
+detiene un puerto. SQLite y los CSV se confirman en disco después de cada registro.
+Detener explícitamente un puerto evita que vuelva a iniciarse en el próximo
+arranque; cerrar la aplicación o apagar la Raspberry conserva los puertos activos.
+
 El adaptador debe usar lógica TTL de 3.3/5 V compatible con el PZEM. No conectes
 los pines seriales directamente a tensiones de red y desconecta la alimentación
 antes de modificar el cableado.

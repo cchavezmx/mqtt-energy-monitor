@@ -117,16 +117,16 @@ sudo apt install python3 python3-venv python3-tk
 sudo usermod -aG dialout "$USER"
 ```
 
-Para generar el ejecutable con PyInstaller se requiere Python 3.8 o posterior.
-Comprueba la versión antes de compilar:
+Comprueba la versión de Python antes de compilar:
 
 ```bash
 python3 --version
 ```
 
-Si muestra Python 3.5, `build_linux.sh` no podrá generar el ejecutable. Sin embargo,
-la aplicación puede ejecutarse directamente en Raspberry Pi OS Stretch instalando
-PySerial desde `apt`:
+En sistemas actuales, el script usa PyInstaller 6. En Raspberry Pi OS Stretch con
+Python 3.5 utiliza automáticamente PyInstaller 3.6, la última versión compatible
+con ese Python. También se puede ejecutar directamente instalando PySerial desde
+`apt`:
 
 ```bash
 sudo apt install python3-serial python3-tk
@@ -134,7 +134,13 @@ cd windows_app
 python3 pzem_monitor.py
 ```
 
-Este modo antiguo no requiere `pip`, `venv` ni PyInstaller.
+Para compilar en el sistema antiguo:
+
+```bash
+cd windows_app
+./build_linux.sh
+./dist/PZEM-Monitor
+```
 
 Cierra la sesión y vuelve a entrar después de agregar el usuario a `dialout`.
 Para ejecutarla directamente desde el código:
